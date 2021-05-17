@@ -542,7 +542,7 @@
       <dependency>
         <groupId>com.amazonaws</groupId>
         <artifactId>aws-java-sdk-sns</artifactId>
-        <version>1.11.457</version>
+        <version>1.11.1019</version>
       </dependency>
       <dependency>
         <groupId>commons-codec</groupId>
