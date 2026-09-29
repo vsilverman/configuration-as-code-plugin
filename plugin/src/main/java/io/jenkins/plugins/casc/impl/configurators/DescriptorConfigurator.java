@@ -1,11 +1,15 @@
 package io.jenkins.plugins.casc.impl.configurators;
 
+import static java.util.Collections.singletonList;
+
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.model.Descriptor;
 import io.jenkins.plugins.casc.BaseConfigurator;
 import io.jenkins.plugins.casc.ConfigurationContext;
 import io.jenkins.plugins.casc.RootElementConfigurator;
 import io.jenkins.plugins.casc.model.Mapping;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -13,15 +17,13 @@ import org.jenkinsci.Symbol;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 
-import static java.util.Collections.singletonList;
-
 /**
  * Define a Configurator for a Descriptor
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
 @Restricted(NoExternalUse.class)
-public class DescriptorConfigurator extends BaseConfigurator<Descriptor> implements RootElementConfigurator<Descriptor> {
-
+public class DescriptorConfigurator extends BaseConfigurator<Descriptor>
+        implements RootElementConfigurator<Descriptor> {
 
     private final List<String> names;
     private final Descriptor descriptor;
@@ -64,16 +66,63 @@ public class DescriptorConfigurator extends BaseConfigurator<Descriptor> impleme
         return Optional.ofNullable(descriptor.getClass().getAnnotation(Symbol.class))
                 .map(s -> Arrays.asList(s.value()))
                 .orElseGet(() -> {
-                    /* TODO: extract Descriptor parameter type such that DescriptorImpl extends Descriptor<XX> returns XX.
-                     * Then, if `baseClass == fooXX` we get natural name `foo`.
-                     */
-                    return singletonList(fromPascalCaseToCamelCase(descriptor.getKlass().toJavaClass().getSimpleName()));
+                    String fallbackName = fromPascalCaseToCamelCase(
+                            unwrapAnonymous(descriptor.getKlass().toJavaClass()).getSimpleName());
+
+                    Class<?> typeParam = extractDescriptorTypeParameter(descriptor.getClass());
+                    String derivedName = null;
+
+                    if (typeParam != null) {
+                        Class<?> targetClass = unwrapAnonymous(typeParam);
+                        derivedName = fromPascalCaseToCamelCase(targetClass.getSimpleName());
+                    }
+
+                    if (derivedName != null && !derivedName.equals(fallbackName)) {
+                        return Arrays.asList(fallbackName, derivedName);
+                    }
+
+                    return singletonList(fallbackName);
                 });
+    }
+
+    private Class<?> extractDescriptorTypeParameter(Class<?> clazz) {
+        while (clazz != null && clazz != Object.class) {
+            Type genericSuperclass = clazz.getGenericSuperclass();
+
+            if (genericSuperclass instanceof ParameterizedType pt
+                    && pt.getRawType() instanceof Class<?> rawClass
+                    && Descriptor.class.isAssignableFrom(rawClass)) {
+
+                Type[] args = pt.getActualTypeArguments();
+
+                if (args.length > 0) {
+                    Type typeArg = args[0];
+
+                    if (typeArg instanceof Class<?> clazzArg) {
+                        return clazzArg;
+                    }
+
+                    if (typeArg instanceof ParameterizedType nestedPt
+                            && nestedPt.getRawType() instanceof Class<?> nestedClass) {
+                        return nestedClass;
+                    }
+                }
+            }
+            clazz = clazz.getSuperclass();
+        }
+        return null;
     }
 
     private static String fromPascalCaseToCamelCase(String s) {
         StringBuilder sb = new StringBuilder(s);
         sb.setCharAt(0, Character.toLowerCase(s.charAt(0)));
         return sb.toString();
+    }
+
+    private Class<?> unwrapAnonymous(Class<?> clazz) {
+        while (clazz.isAnonymousClass()) {
+            clazz = clazz.getSuperclass();
+        }
+        return clazz;
     }
 }

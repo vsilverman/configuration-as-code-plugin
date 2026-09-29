@@ -23,7 +23,10 @@ package io.jenkins.plugins.casc;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import io.jenkins.plugins.casc.model.CNode;
-import java.io.IOException;
+import io.jenkins.plugins.casc.model.Source;
+import java.util.Collections;
+import java.util.List;
+import jenkins.model.Jenkins;
 
 /**
  * Exception type for {@link Configurator} issues.
@@ -32,31 +35,83 @@ import java.io.IOException;
  * @see Configurator#configure(CNode, ConfigurationContext)
  * @see Configurator
  */
-
-public class ConfiguratorException extends IOException {
+public class ConfiguratorException extends RuntimeException {
 
     @CheckForNull
     private final Configurator configurator;
 
-    public ConfiguratorException(@CheckForNull Configurator configurator, @CheckForNull String message, @CheckForNull Throwable cause) {
+    private final List<String> validAttributes;
+
+    @CheckForNull
+    private final String invalidAttribute;
+
+    @CheckForNull
+    private final Source source;
+
+    @CheckForNull
+    private final String path;
+
+    private ConfiguratorException(
+            @CheckForNull Configurator configurator,
+            @CheckForNull String message,
+            @CheckForNull String invalidAttribute,
+            List<String> validAttributes,
+            @CheckForNull Throwable cause,
+            @CheckForNull Source source,
+            @CheckForNull String path) {
         super(message, cause);
         this.configurator = configurator;
+
+        this.invalidAttribute = invalidAttribute;
+        this.validAttributes = validAttributes == null ? Collections.emptyList() : validAttributes;
+        this.source = source;
+        this.path = path;
     }
 
-    public ConfiguratorException(@CheckForNull String message, @CheckForNull Throwable cause) {
-        this(null, message, cause);
+    public static ConfiguratorException from(CNode node, String message) {
+        return new ConfiguratorException(
+                null, message, null, Collections.emptyList(), null, node != null ? node.getSource() : null, null);
     }
 
-    public ConfiguratorException(@CheckForNull Configurator configurator, @CheckForNull String message) {
-        this(configurator, message, null);
+    public static ConfiguratorException from(CNode node, String message, Throwable cause) {
+        return new ConfiguratorException(
+                null, message, null, Collections.emptyList(), cause, node != null ? node.getSource() : null, null);
+    }
+
+    public static ConfiguratorException from(
+            CNode node, Configurator configurator, String path, String message, Throwable cause) {
+        Source source = node != null ? node.getSource() : null;
+        if (source == null && cause instanceof ConfiguratorException) {
+            source = ((ConfiguratorException) cause).getSource();
+        }
+
+        return new ConfiguratorException(configurator, message, null, Collections.emptyList(), cause, source, path);
     }
 
     public ConfiguratorException(@CheckForNull String message) {
-        this(null, message, null);
+        this(null, message, null, Collections.emptyList(), null);
     }
 
-    public ConfiguratorException(@CheckForNull Throwable cause) {
-        this(null, null, cause);
+    public ConfiguratorException(@CheckForNull String message, @CheckForNull Throwable cause) {
+        this(null, message, null, Collections.emptyList(), cause, null, null);
+    }
+
+    public ConfiguratorException(@CheckForNull Configurator configurator, @CheckForNull String message) {
+        this(configurator, message, null, Collections.emptyList(), null, null, null);
+    }
+
+    public ConfiguratorException(
+            @CheckForNull Configurator configurator, @CheckForNull String message, @CheckForNull Throwable cause) {
+        this(configurator, message, null, Collections.emptyList(), cause, null, null);
+    }
+
+    public ConfiguratorException(
+            @CheckForNull Configurator configurator,
+            @CheckForNull String message,
+            String invalidAttribute,
+            List<String> validAttributes,
+            @CheckForNull Throwable cause) {
+        this(configurator, message, invalidAttribute, validAttributes, cause, null, null);
     }
 
     @CheckForNull
@@ -64,11 +119,52 @@ public class ConfiguratorException extends IOException {
         return configurator;
     }
 
+    public List<String> getValidAttributes() {
+        return validAttributes;
+    }
+
+    @CheckForNull
+    public String getInvalidAttribute() {
+        return invalidAttribute;
+    }
+
+    @CheckForNull
+    public Source getSource() {
+        return source;
+    }
+
+    @CheckForNull
+    public String getPath() {
+        return path;
+    }
+
+    public String getErrorMessage() {
+        return super.getMessage();
+    }
+
     @Override
     public String getMessage() {
-        if (configurator != null) {
-            return String.format("%s: %s", configurator.getName(), super.getMessage());
+        final String base = (configurator != null)
+                ? String.format(
+                        "%s: %s",
+                        Jenkins.getInstanceOrNull() == null ? configurator.getClass() : configurator.getName(),
+                        super.getMessage())
+                : super.getMessage();
+
+        if (source == null && path == null) {
+            return base;
         }
-        return super.getMessage();
+
+        StringBuilder sb = new StringBuilder(base);
+        sb.append(System.lineSeparator()).append("  at ");
+        if (source != null) {
+            sb.append(source);
+        } else {
+            sb.append("unknown source");
+        }
+        if (path != null) {
+            sb.append(" (path: ").append(path).append(")");
+        }
+        return sb.toString();
     }
 }

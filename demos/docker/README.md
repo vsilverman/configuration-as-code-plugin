@@ -19,9 +19,10 @@ jenkins:
             dockerTemplateBase:
               # TODO: pin sha256 or versions when using in production
               image: "jenkins/agent"
-              volumes:
-                - hello:/hello
-                - world:/world
+              mounts:
+                - "type=tmpfs,destination=/run"
+                - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,src=hello,dst=/world"
               environmentsString: |
                 hello=world
                 foo=bar
@@ -32,6 +33,16 @@ jenkins:
             instanceCapStr: "10"
             retentionStrategy:
               idleMinutes: 1
+          - labelString: "worker1-agent"
+            dockerTemplateBase:
+              image: "jenkins/ssh-agent:latest-jdk17"
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              ssh:
+                port: 22
+                sshKeyStrategy:
+                  injectSSHKey:
+                    user: "root"
 ```
 
 ## implementation note

@@ -1,5 +1,12 @@
 package io.jenkins.plugins.casc.core;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import hudson.model.TimeZoneProperty;
 import hudson.model.User;
 import hudson.security.FullControlOnceLoggedInAuthorizationStrategy;
 import hudson.security.HudsonPrivateSecurityRealm;
@@ -8,14 +15,9 @@ import io.jenkins.plugins.casc.misc.ConfiguredWithReadme;
 import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithReadmeRule;
 import jenkins.model.Jenkins;
 import jenkins.plugins.slack.user.SlackUserProperty;
+import org.jenkinsci.main.modules.cli.auth.ssh.UserPropertyImpl;
 import org.junit.Rule;
 import org.junit.Test;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
 
 /**
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
@@ -36,7 +38,8 @@ public class HudsonPrivateSecurityRealmConfiguratorTest {
         final HudsonPrivateSecurityRealm.Details details = admin.getProperty(HudsonPrivateSecurityRealm.Details.class);
         assertTrue(details.isPasswordCorrect("somethingsecret"));
 
-        final FullControlOnceLoggedInAuthorizationStrategy authorizationStrategy = (FullControlOnceLoggedInAuthorizationStrategy) jenkins.getAuthorizationStrategy();
+        final FullControlOnceLoggedInAuthorizationStrategy authorizationStrategy =
+                (FullControlOnceLoggedInAuthorizationStrategy) jenkins.getAuthorizationStrategy();
         assertTrue(authorizationStrategy.isAllowAnonymousRead());
     }
 
@@ -58,16 +61,16 @@ public class HudsonPrivateSecurityRealmConfiguratorTest {
         assertThat(admin.getFullName(), is("Admin"));
         assertThat(admin.getDescription(), is("Superwoman"));
 
-        SlackUserProperty slackUserProperty = admin
-            .getProperty(SlackUserProperty.class);
+        SlackUserProperty slackUserProperty = admin.getProperty(SlackUserProperty.class);
         assertThat(slackUserProperty.getUserId(), is("ABCDEFGH"));
 
         UserProperty mailerProperty = admin.getProperty(UserProperty.class);
         assertThat(mailerProperty.getEmailAddress(), is("admin3@example.com"));
 
-// Pending https://github.com/jenkinsci/ssh-cli-auth-module/pull/16
-//        UserPropertyImpl authorizedKeysProperty = admin.getProperty(UserPropertyImpl.class);
-//        assertThat(authorizedKeysProperty.authorizedKeys, is("ssh-rsa some-key\n"));
-    }
+        TimeZoneProperty timeZoneProperty = admin.getProperty(TimeZoneProperty.class);
+        assertThat(timeZoneProperty.getTimeZoneName(), is("Europe/London"));
 
+        UserPropertyImpl authorizedKeysProperty = admin.getProperty(UserPropertyImpl.class);
+        assertThat(authorizedKeysProperty.authorizedKeys, is("ssh-rsa some-key\n"));
+    }
 }

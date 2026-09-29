@@ -19,16 +19,16 @@ package io.jenkins.plugins.casc.util;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import java.lang.reflect.Field;
 import java.util.Iterator;
-import org.apache.commons.lang.ClassUtils;
+import org.apache.commons.lang3.ClassUtils;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
- * Extends {@link org.apache.commons.lang.reflect.FieldUtils} by adding
+ * Extends {@link org.apache.commons.lang3.reflect.FieldUtils} by adding
  * some utility methods.
  */
 @Restricted(NoExternalUse.class)
-public class ExtraFieldUtils extends org.apache.commons.lang.reflect.FieldUtils {
+public class ExtraFieldUtils extends org.apache.commons.lang3.reflect.FieldUtils {
 
     /**
      * Gets an accessible <code>Field</code> by name without breaking scope.
@@ -76,17 +76,15 @@ public class ExtraFieldUtils extends org.apache.commons.lang.reflect.FieldUtils 
         // incase there is a public supersuperclass field hidden by a private/package
         // superclass field.
         Field match = null;
-        for (Iterator intf = ClassUtils.getAllInterfaces(cls).iterator(); intf
-                .hasNext();) {
+        for (Iterator intf = ClassUtils.getAllInterfaces(cls).iterator(); intf.hasNext(); ) {
             try {
                 Field test = ((Class) intf.next()).getField(fieldName);
                 if (match != null) {
-                    throw new IllegalArgumentException(
-                            "Reference to field "
-                                    + fieldName
-                                    + " is ambiguous relative to "
-                                    + cls
-                                    + "; a matching field exists on two or more implemented interfaces.");
+                    throw new IllegalArgumentException("Reference to field "
+                            + fieldName
+                            + " is ambiguous relative to "
+                            + cls
+                            + "; a matching field exists on two or more implemented interfaces.");
                 }
                 match = test;
             } catch (NoSuchFieldException ex) {
@@ -95,5 +93,4 @@ public class ExtraFieldUtils extends org.apache.commons.lang.reflect.FieldUtils 
         }
         return match;
     }
-
 }

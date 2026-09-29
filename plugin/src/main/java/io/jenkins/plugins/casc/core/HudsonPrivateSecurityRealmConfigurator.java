@@ -15,10 +15,8 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -30,8 +28,7 @@ import org.kohsuke.stapler.DataBoundSetter;
 @Extension
 @Restricted(NoExternalUse.class)
 public class HudsonPrivateSecurityRealmConfigurator extends DataBoundConfigurator<HudsonPrivateSecurityRealm> {
-    private static final Logger logger = Logger.getLogger(HudsonPrivateSecurityRealmConfigurator.class.getName());
-    /// matches HudsonPrivateSecurityRealm.JBCRYPT_HEADER
+    // matches HudsonPrivateSecurityRealm.JBCRYPT_HEADER
     private static final String HASHED_PASSWORD_PREFIX = "#jbcrypt:";
 
     public HudsonPrivateSecurityRealmConfigurator() {
@@ -42,19 +39,20 @@ public class HudsonPrivateSecurityRealmConfigurator extends DataBoundConfigurato
     @Override
     public Set<Attribute<HudsonPrivateSecurityRealm, ?>> describe() {
         final Set<Attribute<HudsonPrivateSecurityRealm, ?>> describe = super.describe();
-        describe.add(new MultivaluedAttribute<HudsonPrivateSecurityRealm, UserWithPassword>("users", UserWithPassword.class)
-            .getter(HudsonPrivateSecurityRealmConfigurator::getter)
-            .setter(HudsonPrivateSecurityRealmConfigurator::setter)
-        );
+        describe.add(
+                new MultivaluedAttribute<HudsonPrivateSecurityRealm, UserWithPassword>("users", UserWithPassword.class)
+                        .getter(HudsonPrivateSecurityRealmConfigurator::getter)
+                        .setter(HudsonPrivateSecurityRealmConfigurator::setter));
         return describe;
     }
 
     @CheckForNull
     @Override
-    public CNode describe(HudsonPrivateSecurityRealm instance, ConfigurationContext context)
-        throws Exception {
+    public CNode describe(HudsonPrivateSecurityRealm instance, ConfigurationContext context) throws Exception {
         // allow disabling exporting users if an instance has too many
-        if (System.getProperty("io.jenkins.plugins.casc.core.HudsonPrivateSecurityRealmConfigurator.exportUsers", "true").equals("true")) {
+        if (System.getProperty(
+                        "io.jenkins.plugins.casc.core.HudsonPrivateSecurityRealmConfigurator.exportUsers", "true")
+                .equals("true")) {
             return super.describe(instance, context);
         }
         return null;
@@ -66,10 +64,14 @@ public class HudsonPrivateSecurityRealmConfigurator extends DataBoundConfigurato
                     UserWithPassword user = new UserWithPassword(u.getId(), null);
                     user.setName(u.getFullName());
                     user.setDescription(u.getDescription());
-                    List<UserProperty> properties = u.getAllProperties()
-                        .stream()
-                        .filter(userProperty -> !userProperty.getClass().getName().equals("com.cloudbees.plugins.credentials.UserCredentialsProvider$UserCredentialsProperty"))
-                        .collect(Collectors.toList());
+                    List<UserProperty> properties = u.getAllProperties().stream()
+                            .filter(
+                                    userProperty -> !userProperty
+                                            .getClass()
+                                            .getName()
+                                            .equals(
+                                                    "com.cloudbees.plugins.credentials.UserCredentialsProvider$UserCredentialsProperty"))
+                            .collect(Collectors.toList());
                     user.setProperties(properties);
 
                     return user;
@@ -77,7 +79,8 @@ public class HudsonPrivateSecurityRealmConfigurator extends DataBoundConfigurato
                 .collect(Collectors.toList());
     }
 
-    private static void setter(HudsonPrivateSecurityRealm target, Collection<UserWithPassword> value) throws IOException {
+    private static void setter(HudsonPrivateSecurityRealm target, Collection<UserWithPassword> value)
+            throws IOException {
         for (UserWithPassword user : value) {
             User updatedUser = createAccount(target, user);
             updatedUser.setFullName(user.name);
@@ -90,20 +93,11 @@ public class HudsonPrivateSecurityRealmConfigurator extends DataBoundConfigurato
         }
     }
 
-    private static User createAccount(HudsonPrivateSecurityRealm target, UserWithPassword user)
-        throws IOException {
+    private static User createAccount(HudsonPrivateSecurityRealm target, UserWithPassword user) throws IOException {
         User updatedUser;
         if (StringUtils.isNotBlank(user.password)) {
             if (StringUtils.startsWith(user.password, HASHED_PASSWORD_PREFIX)) {
-                try {
-                    updatedUser = target
-                        .createAccountWithHashedPassword(user.id, user.password);
-                } catch (IllegalArgumentException | IOException e) {
-                    logger.log(Level.WARNING,
-                        "Failed to create user with presumed hashed password", e);
-                    // fallback, just create the account as is
-                    updatedUser = target.createAccount(user.id, user.password);
-                }
+                updatedUser = target.createAccountWithHashedPassword(user.id, user.password);
             } else {
                 updatedUser = target.createAccount(user.id, user.password);
             }

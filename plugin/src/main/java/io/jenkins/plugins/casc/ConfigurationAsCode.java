@@ -1,5 +1,14 @@
 package io.jenkins.plugins.casc;
 
+import static io.jenkins.plugins.casc.SchemaGeneration.writeJSONSchema;
+import static io.jenkins.plugins.casc.fetcher.FetchCredentials.resolveAll;
+import static java.util.Collections.unmodifiableList;
+import static java.util.stream.Collectors.toList;
+import static org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK;
+import static org.yaml.snakeyaml.DumperOptions.ScalarStyle.DOUBLE_QUOTED;
+import static org.yaml.snakeyaml.DumperOptions.ScalarStyle.LITERAL;
+import static org.yaml.snakeyaml.DumperOptions.ScalarStyle.PLAIN;
+
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
@@ -14,6 +23,9 @@ import hudson.security.ACL;
 import hudson.security.ACLContext;
 import hudson.security.Permission;
 import hudson.util.FormValidation;
+import io.jenkins.plugins.casc.fetcher.CasCConfigFetcher;
+import io.jenkins.plugins.casc.fetcher.FetchContext;
+import io.jenkins.plugins.casc.fetcher.FetchCredentials;
 import io.jenkins.plugins.casc.impl.DefaultConfiguratorRegistry;
 import io.jenkins.plugins.casc.model.CNode;
 import io.jenkins.plugins.casc.model.Mapping;
@@ -23,14 +35,18 @@ import io.jenkins.plugins.casc.model.Sequence;
 import io.jenkins.plugins.casc.model.Source;
 import io.jenkins.plugins.casc.yaml.YamlSource;
 import io.jenkins.plugins.casc.yaml.YamlUtils;
+import io.jenkins.plugins.prism.PrismConfiguration;
+import jakarta.inject.Inject;
+import jakarta.servlet.RequestDispatcher;
+import jakarta.servlet.ServletContext;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
@@ -50,6 +66,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.TreeSet;
@@ -57,20 +74,17 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import javax.inject.Inject;
-import javax.servlet.ServletContext;
-import javax.servlet.http.HttpServletResponse;
 import jenkins.model.GlobalConfiguration;
 import jenkins.model.Jenkins;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.QueryParameter;
-import org.kohsuke.stapler.StaplerRequest;
-import org.kohsuke.stapler.StaplerResponse;
+import org.kohsuke.stapler.StaplerRequest2;
+import org.kohsuke.stapler.StaplerResponse2;
 import org.kohsuke.stapler.interceptor.RequirePOST;
 import org.kohsuke.stapler.lang.Klass;
 import org.kohsuke.stapler.verb.POST;
@@ -86,14 +100,6 @@ import org.yaml.snakeyaml.nodes.Tag;
 import org.yaml.snakeyaml.resolver.Resolver;
 import org.yaml.snakeyaml.serializer.Serializer;
 
-import static io.jenkins.plugins.casc.SchemaGeneration.writeJSONSchema;
-import static java.lang.String.format;
-import static java.util.stream.Collectors.toList;
-import static org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK;
-import static org.yaml.snakeyaml.DumperOptions.ScalarStyle.DOUBLE_QUOTED;
-import static org.yaml.snakeyaml.DumperOptions.ScalarStyle.LITERAL;
-import static org.yaml.snakeyaml.DumperOptions.ScalarStyle.PLAIN;
-
 /**
  * {@linkplain #configure() Main entry point of the logic}.
  *
@@ -106,6 +112,7 @@ public class ConfigurationAsCode extends ManagementLink {
     public static final String CASC_JENKINS_CONFIG_ENV = "CASC_JENKINS_CONFIG";
     public static final String DEFAULT_JENKINS_YAML_PATH = "jenkins.yaml";
     public static final String YAML_FILES_PATTERN = "glob:**.{yml,yaml,YAML,YML}";
+    public static final String ALLOW_ANONYMOUS_SCHEMA_PROPERTY = "io.jenkins.plugins.casc.allowAnonymousSchema";
 
     private static final Logger LOGGER = Logger.getLogger(ConfigurationAsCode.class.getName());
 
@@ -119,7 +126,7 @@ public class ConfigurationAsCode extends ManagementLink {
     @CheckForNull
     @Override
     public String getIconFileName() {
-        return "/plugin/configuration-as-code/img/logo-head.svg";
+        return "symbol-logo plugin-configuration-as-code";
     }
 
     @CheckForNull
@@ -136,15 +143,13 @@ public class ConfigurationAsCode extends ManagementLink {
 
     @Override
     public String getDescription() {
-        return "Reload your configuration or update configuration source";
+        return "Reload your configuration or update configuration source.";
     }
 
-    /**
-     * Name of the category for this management link.
-     * TODO: Use getCategory when core requirement is greater or equal to 2.226
-     */
-    public @NonNull String getCategoryName() {
-        return "CONFIGURATION";
+    @NonNull
+    @Override
+    public Category getCategory() {
+        return Category.CONFIGURATION;
     }
 
     @NonNull
@@ -163,54 +168,107 @@ public class ConfigurationAsCode extends ManagementLink {
 
     @RequirePOST
     @Restricted(NoExternalUse.class)
-    public void doReload(StaplerRequest request, StaplerResponse response) throws Exception {
+    public void doReload(StaplerRequest2 request, StaplerResponse2 response) throws Exception {
         if (!Jenkins.get().hasPermission(Jenkins.MANAGE)) {
             response.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
         }
-        configure();
+
+        try {
+            configure();
+        } catch (ConfiguratorException e) {
+            LOGGER.log(Level.SEVERE, "Failed to reload configuration", e);
+
+            Throwable throwableCause = e.getCause();
+            if (throwableCause instanceof ConfiguratorException) {
+                ConfiguratorException cause = (ConfiguratorException) throwableCause;
+
+                handleExceptionOnReloading(request, response, cause);
+            } else {
+                handleExceptionOnReloading(request, response, e);
+            }
+            return;
+        }
         response.sendRedirect("");
+    }
+
+    @Restricted(NoExternalUse.class)
+    public static void handleExceptionOnReloading(
+            StaplerRequest2 request, StaplerResponse2 response, ConfiguratorException cause)
+            throws ServletException, IOException {
+        Configurator<?> configurator = cause.getConfigurator();
+        request.setAttribute("errorMessage", cause.getErrorMessage());
+        if (configurator != null) {
+            request.setAttribute("target", configurator.getName());
+        } else if (cause instanceof UnknownConfiguratorException) {
+            List<String> configuratorNames = ((UnknownConfiguratorException) cause).getConfiguratorNames();
+            request.setAttribute("target", String.join(", ", configuratorNames));
+        }
+        request.setAttribute("invalidAttribute", cause.getInvalidAttribute());
+        request.setAttribute("validAttributes", cause.getValidAttributes());
+        RequestDispatcher view = request.getView(ConfigurationAsCode.class, "error.jelly");
+        if (view != null) {
+            view.forward(request, response);
+        }
     }
 
     @RequirePOST
     @Restricted(NoExternalUse.class)
-    public void doReplace(StaplerRequest request, StaplerResponse response) throws Exception {
+    public void doReplace(StaplerRequest2 request, StaplerResponse2 response) throws Exception {
         if (!Jenkins.get().hasPermission(Jenkins.ADMINISTER)) {
             response.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
         }
-        String newSource = request.getParameter("_.newSource");
-        String normalizedSource = Util.fixEmptyAndTrim(newSource);
-        List<String> candidateSources = new ArrayList<>();
-        for (String candidateSource : inputToCandidateSources(normalizedSource)) {
-            File file = new File(candidateSource);
-            if (file.exists() || ConfigurationAsCode.isSupportedURI(candidateSource)) {
-                candidateSources.add(candidateSource);
-            } else {
-                LOGGER.log(Level.WARNING, "Source {0} could not be applied", candidateSource);
-                // todo: show message in UI
-            }
-        }
-        if (!candidateSources.isEmpty()) {
-            List<YamlSource> candidates = getConfigFromSources(candidateSources);
-            if (canApplyFrom(candidates)) {
-                sources = candidateSources;
-                configureWith(getConfigFromSources(getSources()));
-                CasCGlobalConfig config = GlobalConfiguration.all().get(CasCGlobalConfig.class);
-                if (config != null) {
-                    config.setConfigurationPath(normalizedSource);
-                    config.save();
+        try {
+            String newSource = request.getParameter("_.newSource");
+            String normalizedSource = Util.fixEmptyAndTrim(newSource);
+            List<String> candidateSources = new ArrayList<>();
+            for (String candidateSource : inputToCandidateSources(normalizedSource)) {
+                File file = new File(candidateSource);
+                if (file.exists() || ConfigurationAsCode.isSupportedURI(candidateSource)) {
+                    candidateSources.add(candidateSource);
+                } else {
+                    LOGGER.log(Level.WARNING, "Source {0} could not be applied", candidateSource);
+                    throw new ConfiguratorException(
+                            "Source " + candidateSource + " could not be applied or does not exist.");
                 }
-                LOGGER.log(Level.FINE, "Replace configuration with: " + normalizedSource);
-            } else {
-                LOGGER.log(Level.WARNING, "Provided sources could not be applied");
-                // todo: show message in UI
             }
-        } else {
-            LOGGER.log(Level.FINE, "No such source exists, applying default");
-            // May be do nothing instead?
-            configure();
+            if (!candidateSources.isEmpty()) {
+                try (FetchContext context = getConfigFromSources(candidateSources)) {
+                    if (canApplyFrom(context.getSources())) {
+                        sources = unmodifiableList(candidateSources);
+                        try (FetchContext applyContext = getConfigFromSources(getSources())) {
+                            configureWith(applyContext.getSources());
+                        }
+                        CasCGlobalConfig config = GlobalConfiguration.all().get(CasCGlobalConfig.class);
+                        if (config != null) {
+                            config.setConfigurationPath(normalizedSource);
+                            config.save();
+                        }
+                        LOGGER.log(Level.FINE, "Replace configuration with: " + normalizedSource);
+                    } else {
+                        LOGGER.log(Level.WARNING, "Provided sources could not be applied");
+                        throw new ConfiguratorException(
+                                "Provided sources could not be applied. Please check the syntax and validity of the provided configuration.");
+                    }
+                }
+            } else {
+                LOGGER.log(Level.FINE, "No such source exists, applying default");
+                // May be do nothing instead?
+                configure();
+            }
+        } catch (ConfiguratorException e) {
+            LOGGER.log(Level.SEVERE, "Failed to reload configuration", e);
+
+            Throwable throwableCause = e.getCause();
+            if (throwableCause instanceof ConfiguratorException cause) {
+                handleExceptionOnReloading(request, response, cause);
+            } else {
+                handleExceptionOnReloading(request, response, e);
+            }
+            return;
         }
+
         response.sendRedirect("");
     }
 
@@ -236,13 +294,13 @@ public class ConfigurationAsCode extends ManagementLink {
         for (String candidateSource : inputToCandidateSources(normalizedSource)) {
             File file = new File(candidateSource);
             if (!file.exists() && !ConfigurationAsCode.isSupportedURI(candidateSource)) {
-                return FormValidation.error("Configuration cannot be applied. File or URL cannot be parsed or do not exist.");
+                return FormValidation.error(
+                        "Configuration cannot be applied. File or URL cannot be parsed or do not exist.");
             }
             candidateSources.add(candidateSource);
         }
-        try {
-            List<YamlSource> candidates = getConfigFromSources(candidateSources);
-            final Map<Source, String> issues = checkWith(candidates);
+        try (FetchContext context = getConfigFromSources(candidateSources)) {
+            final Map<Source, String> issues = checkWith(context.getSources());
             final JSONArray errors = collectProblems(issues, "error");
             if (!errors.isEmpty()) {
                 return FormValidation.error(errors.toString());
@@ -251,36 +309,69 @@ public class ConfigurationAsCode extends ManagementLink {
             if (!warnings.isEmpty()) {
                 return FormValidation.warning(warnings.toString());
             }
-            return FormValidation.okWithMarkup("The configuration can be applied");
-        } catch (ConfiguratorException | IllegalArgumentException e) {
-            return FormValidation.error(e, e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            return FormValidation.ok("The configuration can be applied");
+        } catch (Exception e) {
+            String errorMessage = e.getMessage();
+            if (errorMessage == null && e.getCause() != null) {
+                errorMessage = e.getCause().getMessage();
+            }
+            if (errorMessage == null) {
+                errorMessage = "An unexpected " + e.getClass().getSimpleName() + " occurred.";
+            }
+            return FormValidation.error("Invalid configuration: " + errorMessage);
         }
     }
 
     private JSONArray collectProblems(Map<Source, String> issues, String severity) {
         final JSONArray problems = new JSONArray();
-        issues.entrySet().stream().map(e -> new JSONObject().accumulate("line", e.getKey().line).accumulate(severity, e.getValue()))
+        issues.entrySet().stream()
+                .map(e -> new JSONObject()
+                        .accumulate(
+                                "line",
+                                Optional.ofNullable(e.getKey())
+                                        .map(Source::line)
+                                        .orElse(-1))
+                        .accumulate(severity, e.getValue()))
                 .forEach(problems::add);
         return problems;
     }
 
-    private void appendSources(List<YamlSource> sources, String source) throws ConfiguratorException {
-        if (isSupportedURI(source)) {
-            sources.add(YamlSource.of(source));
-        } else {
-            sources.addAll(configs(source).stream()
-                .map(YamlSource::of)
-                .collect(toList()));
-        }
-    }
+    private FetchContext getConfigFromSources(List<String> newSources) throws ConfiguratorException {
+        FetchContext context = new FetchContext();
+        boolean success = false;
 
-    private List<YamlSource> getConfigFromSources(List<String> newSources) throws ConfiguratorException {
-        List<YamlSource> sources = new ArrayList<>();
+        try {
+            FetchCredentials credentials = resolveAll();
 
-        for (String p : newSources) {
-            appendSources(sources, p);
+            for (String p : newSources) {
+                boolean fetched = false;
+
+                for (CasCConfigFetcher fetcher : Jenkins.get().getExtensionList(CasCConfigFetcher.class)) {
+                    if (fetcher.supports(p)) {
+                        try {
+                            context.add(fetcher.fetch(p, credentials));
+                            fetched = true;
+                            break;
+                        } catch (IOException e) {
+                            throw new ConfiguratorException("Failed to fetch configuration from " + p, e);
+                        }
+                    }
+                }
+
+                if (!fetched) {
+                    throw new ConfiguratorException("Source '" + p
+                            + "' is not supported by any registered configuration fetcher or does not exist.");
+                }
+            }
+
+            success = true;
+            return context;
+
+        } finally {
+            if (!success) {
+                context.close();
+            }
         }
-        return sources;
     }
 
     /**
@@ -295,7 +386,11 @@ public class ConfigurationAsCode extends ManagementLink {
     @Initializer(after = InitMilestone.SYSTEM_CONFIG_LOADED, before = InitMilestone.SYSTEM_CONFIG_ADAPTED)
     public static void init() throws Exception {
         detectVaultPluginMissing();
-        get().configure();
+        try {
+            get().configure();
+        } catch (ConfiguratorException e) {
+            throw new ConfigurationAsCodeBootFailure(e);
+        }
     }
 
     /**
@@ -303,18 +398,16 @@ public class ConfigurationAsCode extends ManagementLink {
      * @throws ConfiguratorException Configuration error
      */
     public void configure() throws ConfiguratorException {
-        configureWith(getStandardConfigSources());
+        try (FetchContext context = getStandardConfigSources()) {
+            configureWith(context.getSources());
+        }
     }
 
-    private List<YamlSource> getStandardConfigSources() throws ConfiguratorException {
-        List<YamlSource> configs = new ArrayList<>();
-
+    private FetchContext getStandardConfigSources() throws ConfiguratorException {
         List<String> standardConfig = getStandardConfig();
-        for (String p : standardConfig) {
-            appendSources(configs, p);
-        }
-        sources = Collections.unmodifiableList(standardConfig);
-        return configs;
+        FetchContext context = getConfigFromSources(standardConfig);
+        sources = unmodifiableList(standardConfig);
+        return context;
     }
 
     private List<String> getStandardConfig() {
@@ -322,10 +415,8 @@ public class ConfigurationAsCode extends ManagementLink {
         CasCGlobalConfig casc = GlobalConfiguration.all().get(CasCGlobalConfig.class);
         String cascPath = casc != null ? casc.getConfigurationPath() : null;
 
-        String configParameter = System.getProperty(
-                CASC_JENKINS_CONFIG_PROPERTY,
-                System.getenv(CASC_JENKINS_CONFIG_ENV)
-        );
+        String configParameter =
+                System.getProperty(CASC_JENKINS_CONFIG_PROPERTY, System.getenv(CASC_JENKINS_CONFIG_ENV));
 
         // We prefer to rely on environment variable over global config
         if (StringUtils.isNotBlank(cascPath) && StringUtils.isBlank(configParameter)) {
@@ -373,7 +464,7 @@ public class ConfigurationAsCode extends ManagementLink {
         final String cascDirectory = "/WEB-INF/" + DEFAULT_JENKINS_YAML_PATH + ".d/";
         List<String> res = new ArrayList<>();
 
-        final ServletContext servletContext = Jenkins.get().servletContext;
+        final ServletContext servletContext = Jenkins.get().getServletContext();
         try {
             URL bundled = servletContext.getResource(cascFile);
             if (bundled != null) {
@@ -385,14 +476,19 @@ public class ConfigurationAsCode extends ManagementLink {
 
         PathMatcher matcher = FileSystems.getDefault().getPathMatcher(YAML_FILES_PATTERN);
         Set<String> resources = servletContext.getResourcePaths(cascDirectory);
-        if (resources!=null) {
+        if (resources != null) {
             // sort to execute them in a deterministic order
             for (String cascItem : new TreeSet<>(resources)) {
                 try {
                     URL bundled = servletContext.getResource(cascItem);
                     if (bundled != null && matcher.matches(new File(bundled.getPath()).toPath())) {
                         res.add(bundled.toString());
-                    } //TODO: else do some handling?
+                    } else if (bundled != null) {
+                        LOGGER.log(
+                                Level.FINE,
+                                "Skipped bundled resource {0} as it does not match the YAML pattern.",
+                                bundled.getPath());
+                    }
                 } catch (IOException e) {
                     LOGGER.log(Level.WARNING, "Failed to execute " + res, e);
                 }
@@ -404,24 +500,59 @@ public class ConfigurationAsCode extends ManagementLink {
 
     @RequirePOST
     @Restricted(NoExternalUse.class)
-    public void doCheck(StaplerRequest req, StaplerResponse res) throws Exception {
-
+    public void doCheck(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
         if (!Jenkins.get().hasPermission(Jenkins.ADMINISTER)) {
             res.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
         }
 
-        final Map<Source, String> issues = checkWith(YamlSource.of(req));
         res.setContentType("application/json");
-        final JSONArray warnings = new JSONArray();
-        issues.entrySet().stream().map(e -> new JSONObject().accumulate("line", e.getKey().line).accumulate("warning", e.getValue()))
-                .forEach(warnings::add);
-        warnings.write(res.getWriter());
+
+        try {
+            final Map<Source, String> validationIssues = checkWith(YamlSource.of(req));
+
+            // Create JSON array for response
+            JSONArray response = new JSONArray();
+
+            // If there are validation issues, add them to the response array
+            validationIssues.entrySet().stream()
+                    .map(e -> new JSONObject()
+                            .accumulate("line", e.getKey() != null ? e.getKey().line() : -1)
+                            .accumulate("message", e.getValue()))
+                    .forEach(response::add);
+
+            // Write the response - will be empty array for valid YAML
+            response.write(res.getWriter());
+
+        } catch (ConfiguratorException e) {
+            // Return 400 Bad Request for configuration errors
+            res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+
+            JSONArray errors = new JSONArray();
+            errors.add(new JSONObject().accumulate("line", -1).accumulate("message", e.getMessage()));
+
+            errors.write(res.getWriter());
+
+        } catch (Exception e) {
+            // Return 400 Bad Request for all other errors
+            res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+
+            JSONArray errors = new JSONArray();
+            errors.add(new JSONObject()
+                    .accumulate("line", -1)
+                    .accumulate(
+                            "message",
+                            e.getMessage() != null
+                                    ? e.getMessage()
+                                    : e.getClass().getName()));
+
+            errors.write(res.getWriter());
+        }
     }
 
     @RequirePOST
     @Restricted(NoExternalUse.class)
-    public void doApply(StaplerRequest req, StaplerResponse res) throws Exception {
+    public void doApply(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
 
         if (!Jenkins.get().hasPermission(Jenkins.ADMINISTER)) {
             res.sendError(HttpServletResponse.SC_FORBIDDEN);
@@ -436,7 +567,7 @@ public class ConfigurationAsCode extends ManagementLink {
      */
     @RequirePOST
     @Restricted(NoExternalUse.class)
-    public void doExport(StaplerRequest req, StaplerResponse res) throws Exception {
+    public void doExport(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
         if (!Jenkins.get().hasPermission(Jenkins.SYSTEM_READ)) {
             res.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
@@ -452,8 +583,9 @@ public class ConfigurationAsCode extends ManagementLink {
      * @throws Exception
      */
     @Restricted(NoExternalUse.class)
-    public void doSchema(StaplerRequest req, StaplerResponse res) throws Exception {
-        if (!Jenkins.get().hasPermission(Jenkins.SYSTEM_READ)) {
+    public void doSchema(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
+        boolean allowAnonymous = Boolean.getBoolean(ALLOW_ANONYMOUS_SCHEMA_PROPERTY);
+        if (!allowAnonymous && !Jenkins.get().hasPermission(Jenkins.SYSTEM_READ)) {
             res.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
         }
@@ -464,7 +596,7 @@ public class ConfigurationAsCode extends ManagementLink {
 
     @RequirePOST
     @Restricted(NoExternalUse.class)
-    public void doViewExport(StaplerRequest req, StaplerResponse res) throws Exception {
+    public void doViewExport(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
         if (!Jenkins.get().hasPermission(Jenkins.SYSTEM_READ)) {
             res.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
@@ -473,12 +605,17 @@ public class ConfigurationAsCode extends ManagementLink {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         export(out);
 
-        req.setAttribute("export", out.toString(StandardCharsets.UTF_8.name()));
+        req.setAttribute("exportedYaml", out.toString(StandardCharsets.UTF_8));
         req.getView(this, "viewExport.jelly").forward(req, res);
     }
 
     @Restricted(NoExternalUse.class)
-    public void doReference(StaplerRequest req, StaplerResponse res) throws Exception {
+    public PrismConfiguration getPrismConfiguration() {
+        return PrismConfiguration.getInstance();
+    }
+
+    @Restricted(NoExternalUse.class)
+    public void doReference(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
         if (!Jenkins.get().hasPermission(Jenkins.SYSTEM_READ)) {
             res.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
@@ -496,10 +633,10 @@ public class ConfigurationAsCode extends ManagementLink {
         for (RootElementConfigurator root : RootElementConfigurator.all()) {
             final CNode config = root.describe(root.getTargetComponent(context), context);
             final Node valueNode = toYaml(config);
-            if (valueNode == null) continue;
-            tuples.add(new NodeTuple(
-                    new ScalarNode(Tag.STR, root.getName(), null, null, PLAIN),
-                    valueNode));
+            if (valueNode == null) {
+                continue;
+            }
+            tuples.add(new NodeTuple(new ScalarNode(Tag.STR, root.getName(), null, null, PLAIN), valueNode));
         }
 
         MappingNode root = new MappingNode(Tag.MAP, tuples, BLOCK);
@@ -517,8 +654,7 @@ public class ConfigurationAsCode extends ManagementLink {
         options.setDefaultScalarStyle(PLAIN);
         options.setSplitLines(true);
         options.setPrettyFlow(true);
-        Serializer serializer = new Serializer(new Emitter(writer, options), new Resolver(),
-                options, null);
+        Serializer serializer = new Serializer(new Emitter(writer, options), new Resolver(), options, null);
         serializer.open();
         serializer.serialize(root);
         serializer.close();
@@ -528,7 +664,9 @@ public class ConfigurationAsCode extends ManagementLink {
     @Restricted(NoExternalUse.class) // for testing only
     public Node toYaml(CNode config) throws ConfiguratorException {
 
-        if (config == null) return null;
+        if (config == null) {
+            return null;
+        }
 
         switch (config.getType()) {
             case MAPPING:
@@ -538,13 +676,11 @@ public class ConfigurationAsCode extends ManagementLink {
                 entries.sort(Map.Entry.comparingByKey());
                 for (Map.Entry<String, CNode> entry : entries) {
                     final Node valueNode = toYaml(entry.getValue());
-                    if (valueNode == null) continue;
-                    tuples.add(new NodeTuple(
-                            new ScalarNode(Tag.STR, entry.getKey(), null, null, PLAIN),
-                            valueNode));
-
+                    if (valueNode == null) {
+                        continue;
+                    }
+                    tuples.add(new NodeTuple(new ScalarNode(Tag.STR, entry.getKey(), null, null, PLAIN), valueNode));
                 }
-                if (tuples.isEmpty()) return null;
 
                 return new MappingNode(Tag.MAP, tuples, BLOCK);
 
@@ -553,17 +689,23 @@ public class ConfigurationAsCode extends ManagementLink {
                 List<Node> nodes = new ArrayList<>();
                 for (CNode cNode : sequence) {
                     final Node valueNode = toYaml(cNode);
-                    if (valueNode == null) continue;
+                    if (valueNode == null) {
+                        continue;
+                    }
                     nodes.add(valueNode);
                 }
-                if (nodes.isEmpty()) return null;
+                if (nodes.isEmpty()) {
+                    return null;
+                }
                 return new SequenceNode(Tag.SEQ, nodes, BLOCK);
 
             case SCALAR:
             default:
                 final Scalar scalar = config.asScalar();
                 final String value = scalar.getValue();
-                if (value == null || value.length() == 0) return null;
+                if (StringUtils.isBlank(value) && !scalar.isPrintableWhenEmpty()) {
+                    return null;
+                }
 
                 final DumperOptions.ScalarStyle style;
                 if (scalar.getFormat().equals(Format.MULTILINESTRING) && !scalar.isRaw()) {
@@ -591,44 +733,41 @@ public class ConfigurationAsCode extends ManagementLink {
         }
     }
 
-    public void configure(String ... configParameters) throws ConfiguratorException {
+    public void configure(String... configParameters) throws ConfiguratorException {
         configure(Arrays.asList(configParameters));
     }
 
     public void configure(Collection<String> configParameters) throws ConfiguratorException {
 
-        List<YamlSource> configs = new ArrayList<>();
+        List<String> newSources = new ArrayList<>(configParameters);
 
-        for (String p : configParameters) {
-            appendSources(configs, p);
+        try (FetchContext context = getConfigFromSources(newSources)) {
+            sources = unmodifiableList(newSources);
+            configureWith(context.getSources());
+            lastTimeLoaded = System.currentTimeMillis();
         }
-        sources = Collections.unmodifiableList(new ArrayList<>(configParameters));
-        configureWith(configs);
-        lastTimeLoaded = System.currentTimeMillis();
     }
 
     public static boolean isSupportedURI(String configurationParameter) {
-        if(configurationParameter == null) {
+        if (configurationParameter == null) {
             return false;
         }
-        final List<String> supportedProtocols = Arrays.asList("https","http","file");
-        URI uri;
-        try {
-            uri = new URI(configurationParameter);
-        } catch (URISyntaxException ex) {
-            return false;
+        for (CasCConfigFetcher fetcher : Jenkins.get().getExtensionList(CasCConfigFetcher.class)) {
+            if (fetcher.supports(configurationParameter)) {
+                return true;
+            }
         }
-        if(uri.getScheme() == null) {
-            return false;
-        }
-        return supportedProtocols.contains(uri.getScheme());
+        return false;
     }
 
     @Restricted(NoExternalUse.class)
+    @SuppressWarnings("rawtypes")
     public void configureWith(YamlSource source) throws ConfiguratorException {
-        final List<YamlSource> sources = getStandardConfigSources();
-        sources.add(source);
-        configureWith(sources);
+        try (FetchContext context = getStandardConfigSources()) {
+            List<YamlSource> allSources = new ArrayList<>(context.getSources());
+            allSources.add(source);
+            configureWith(allSources);
+        }
     }
 
     private void configureWith(List<YamlSource> sources) throws ConfiguratorException {
@@ -645,7 +784,9 @@ public class ConfigurationAsCode extends ManagementLink {
     }
 
     private Map<Source, String> checkWith(List<YamlSource> sources) throws ConfiguratorException {
-        if (sources.isEmpty()) return Collections.emptyMap();
+        if (sources.isEmpty()) {
+            return Collections.emptyMap();
+        }
         ConfigurationContext context = new ConfigurationContext(registry);
         return checkWith(YamlUtils.loadFrom(sources, context), context);
     }
@@ -661,7 +802,7 @@ public class ConfigurationAsCode extends ManagementLink {
         final Path root = Paths.get(path);
 
         if (!Files.exists(root)) {
-            throw new ConfiguratorException("Invalid configuration: '"+path+"' isn't a valid path.");
+            throw new ConfiguratorException("Invalid configuration: '" + path + "' isn't a valid path.");
         }
 
         if (Files.isRegularFile(root) && Files.isReadable(root)) {
@@ -669,8 +810,11 @@ public class ConfigurationAsCode extends ManagementLink {
         }
 
         final PathMatcher matcher = FileSystems.getDefault().getPathMatcher(YAML_FILES_PATTERN);
-        try (Stream<Path> stream = Files.find(Paths.get(path), Integer.MAX_VALUE,
-                (next, attrs) -> !attrs.isDirectory() && !isHidden(next) && matcher.matches(next), FileVisitOption.FOLLOW_LINKS)) {
+        try (Stream<Path> stream = Files.find(
+                root,
+                Integer.MAX_VALUE,
+                (next, attrs) -> !attrs.isDirectory() && !isHidden(next) && matcher.matches(next),
+                FileVisitOption.FOLLOW_LINKS)) {
             return stream.sorted().collect(toList());
         } catch (IOException e) {
             throw new IllegalStateException("failed config scan for " + path, e);
@@ -678,9 +822,8 @@ public class ConfigurationAsCode extends ManagementLink {
     }
 
     private static boolean isHidden(Path path) {
-        return IntStream.range(0, path.getNameCount())
-            .mapToObj(path::getName)
-            .anyMatch(subPath -> subPath.toString().startsWith("."));
+        return IntStream.range(0, path.getNameCount()).mapToObj(path::getName).anyMatch(subPath -> subPath.toString()
+                .startsWith("."));
     }
 
     @FunctionalInterface
@@ -705,19 +848,12 @@ public class ConfigurationAsCode extends ManagementLink {
             final Iterator<Map.Entry<String, CNode>> it = entries.entrySet().iterator();
             while (it.hasNext()) {
                 Map.Entry<String, CNode> entry = it.next();
-                if (! entry.getKey().equalsIgnoreCase(configurator.getName())) {
+                if (!entry.getKey().equalsIgnoreCase(configurator.getName())) {
                     continue;
                 }
-                try {
-                    function.apply(configurator, entry.getValue());
-                    it.remove();
-                    break;
-                } catch (ConfiguratorException e) {
-                    throw new ConfiguratorException(
-                            configurator,
-                            format("error configuring '%s' with %s configurator", entry.getKey(), configurator.getClass()), e
-                    );
-                }
+                function.apply(configurator, entry.getValue());
+                it.remove();
+                break;
             }
         }
 
@@ -731,7 +867,12 @@ public class ConfigurationAsCode extends ManagementLink {
             });
 
             if (!unknownKeys.isEmpty()) {
-                throw new ConfiguratorException(format("No configurator for the following root elements %s", String.join(", ", unknownKeys)));
+                String message = String.format(
+                        "No configurator found for the following root %s: %s. "
+                                + "This may indicate that the required plugin is not installed or failed to load. "
+                                + "Verify that the plugin is installed and check the Jenkins startup logs for plugin loading errors.",
+                        unknownKeys.size() > 1 ? "elements" : "element", String.join(", ", unknownKeys));
+                throw new UnknownConfiguratorException(unknownKeys, message);
             }
         }
     }
@@ -744,19 +885,19 @@ public class ConfigurationAsCode extends ManagementLink {
         PluginManager pluginManager = Jenkins.get().getPluginManager();
         Set<String> envKeys = System.getenv().keySet();
         if (envKeys.stream().anyMatch(s -> s.startsWith("CASC_VAULT_"))
-            && pluginManager.getPlugin("hashicorp-vault-plugin") == null) {
-            LOGGER.log(Level.SEVERE,
-                "Vault secret resolver is not installed, consider installing hashicorp-vault-plugin v2.4.0 or higher\nor consider removing any 'CASC_VAULT_' variables");
+                && pluginManager.getPlugin("hashicorp-vault-plugin") == null) {
+            LOGGER.log(
+                    Level.SEVERE,
+                    "Vault secret resolver is not installed, consider installing hashicorp-vault-plugin v2.4.0 or higher\nor consider removing any 'CASC_VAULT_' variables");
         }
     }
 
-    private void configureWith(Mapping entries,
-        ConfigurationContext context) throws ConfiguratorException {
+    private void configureWith(Mapping entries, ConfigurationContext context) throws ConfiguratorException {
         // Initialize secret sources
         SecretSource.all().forEach(SecretSource::init);
 
         // Check input before actually applying changes, so we don't let controller in a
-        //weird state after some ConfiguratorException has been thrown
+        // weird state after some ConfiguratorException has been thrown
         final Mapping clone = entries.clone();
         checkWith(clone, context);
 
@@ -764,19 +905,17 @@ public class ConfigurationAsCode extends ManagementLink {
         monitor.reset();
         context.clearListeners();
         context.addListener(monitor::record);
-        try (ACLContext acl = ACL.as(ACL.SYSTEM)) {
+        try (ACLContext acl = ACL.as2(ACL.SYSTEM2)) {
             invokeWith(entries, (configurator, config) -> configurator.configure(config, context));
         }
     }
 
-    public Map<Source, String> checkWith(Mapping entries,
-        ConfigurationContext context) throws ConfiguratorException {
+    public Map<Source, String> checkWith(Mapping entries, ConfigurationContext context) throws ConfiguratorException {
         Map<Source, String> issues = new HashMap<>();
-        context.addListener( (node,message) -> issues.put(node.getSource(), message) );
+        context.addListener((node, message) -> issues.put(node.getSource(), message));
         invokeWith(entries, (configurator, config) -> configurator.check(config, context));
         return issues;
     }
-
 
     public static ConfigurationAsCode get() {
         return Jenkins.get().getExtensionList(ConfigurationAsCode.class).get(0);
@@ -809,7 +948,7 @@ public class ConfigurationAsCode extends ManagementLink {
      * @param attributes siblings to find associated configurators and dive to next tree levels
      * @param context
      */
-    private void listElements(Set<Object> elements, Set<Attribute<?,?>> attributes, ConfigurationContext context) {
+    private void listElements(Set<Object> elements, Set<Attribute<?, ?>> attributes, ConfigurationContext context) {
         attributes.stream()
                 .map(Attribute::getType)
                 .map(context::lookup)
@@ -818,7 +957,10 @@ public class ConfigurationAsCode extends ManagementLink {
                 .flatMap(Collection::stream)
                 .forEach(configurator -> {
                     if (elements.add(configurator)) {
-                        listElements(elements, ((Configurator)configurator).describe(), context);   // some unexpected type erasure force to cast here
+                        listElements(
+                                elements,
+                                ((Configurator) configurator).describe(),
+                                context); // some unexpected type erasure force to cast here
                     }
                 });
     }
@@ -861,9 +1003,51 @@ public class ConfigurationAsCode extends ManagementLink {
     @Restricted(NoExternalUse.class)
     public static String printThrowable(@NonNull Throwable t) {
         String s = Functions.printThrowable(t)
-            .split("at io.jenkins.plugins.casc.ConfigurationAsCode.export")[0]
-            .replaceAll("\t", "  ");
+                .split("at io.jenkins.plugins.casc.ConfigurationAsCode.export")[0]
+                .replaceAll("\t", "  ");
         return s.substring(0, s.lastIndexOf(")") + 1);
     }
 
+    @RequirePOST
+    @Restricted(NoExternalUse.class)
+    @SuppressWarnings("unused")
+    public void doConfigure(StaplerRequest2 req, StaplerResponse2 res) throws Exception {
+
+        if (!Jenkins.get().hasPermission(Jenkins.ADMINISTER)) {
+            res.sendError(HttpServletResponse.SC_FORBIDDEN, "Requires ADMINISTER permission");
+            return;
+        }
+
+        if (req.getContentLength() <= 0) {
+            res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            res.setContentType("application/json; charset=utf-8");
+            JSONArray errors = new JSONArray();
+            JSONObject error = new JSONObject();
+            error.put("line", -1);
+            error.put("message", "Request body cannot be empty.");
+            errors.add(error);
+            res.getWriter().print(errors);
+            return;
+        }
+
+        try {
+            configureWith(YamlSource.of(req));
+            res.setStatus(HttpServletResponse.SC_OK);
+            res.setContentType("text/plain; charset=utf-8");
+            res.getWriter().print("Configuration successfully applied.");
+
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to apply configuration from POST payload", e);
+            res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            res.setContentType("application/json; charset=utf-8");
+
+            JSONArray errors = new JSONArray();
+            JSONObject error = new JSONObject();
+            error.put("line", -1);
+            error.put("message", e.getMessage());
+            errors.add(error);
+
+            res.getWriter().print(errors);
+        }
+    }
 }

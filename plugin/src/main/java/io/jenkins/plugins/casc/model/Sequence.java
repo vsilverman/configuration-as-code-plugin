@@ -6,13 +6,11 @@ import java.util.Objects;
 /**
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
-
 public final class Sequence extends ArrayList<CNode> implements CNode {
 
     private Source source;
 
-    public Sequence() {
-    }
+    public Sequence() {}
 
     public Sequence(int initialCapacity) {
         super(initialCapacity);
@@ -22,7 +20,6 @@ public final class Sequence extends ArrayList<CNode> implements CNode {
     public Type getType() {
         return Type.SEQUENCE;
     }
-
 
     @Override
     public Sequence asSequence() {
@@ -40,16 +37,15 @@ public final class Sequence extends ArrayList<CNode> implements CNode {
 
     @Override
     public Sequence clone() {
-        final Sequence clone = new Sequence();
+        Sequence clone = (Sequence) super.clone();
+        clone.clear();
         stream().map(CNode::clone).forEach(clone::add);
         return clone;
     }
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof Sequence
-            && Objects.equals(this.source, ((Sequence) o).source)
-            && super.equals(o);
+        return o instanceof Sequence && Objects.equals(this.source, ((Sequence) o).source) && super.equals(o);
     }
 
     @Override

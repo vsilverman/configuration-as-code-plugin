@@ -1,30 +1,28 @@
 package io.jenkins.plugins.casc;
 
-import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
-import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
-import io.jenkins.plugins.casc.model.CNode;
-import org.jenkinsci.plugins.docker.workflow.declarative.GlobalConfig;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.jvnet.hudson.test.Issue;
-
 import static io.jenkins.plugins.casc.misc.Util.getUnclassifiedRoot;
 import static io.jenkins.plugins.casc.misc.Util.toStringFromYamlFile;
 import static io.jenkins.plugins.casc.misc.Util.toYamlString;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-public class DockerWorkflowSymbolTest {
+import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
+import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
+import io.jenkins.plugins.casc.misc.junit.jupiter.WithJenkinsConfiguredWithCode;
+import io.jenkins.plugins.casc.model.CNode;
+import org.jenkinsci.plugins.docker.workflow.declarative.GlobalConfig;
+import org.junit.jupiter.api.Test;
+import org.jvnet.hudson.test.Issue;
 
-    @ClassRule
-    @ConfiguredWithCode("DockerWorkflowSymbol.yml")
-    public static JenkinsConfiguredWithCodeRule j = new JenkinsConfiguredWithCodeRule();
+@WithJenkinsConfiguredWithCode
+class DockerWorkflowSymbolTest {
 
     @Test
     @Issue("1260")
-    public void configure_global_definition() {
+    @ConfiguredWithCode("DockerWorkflowSymbol.yml")
+    void configure_global_definition(JenkinsConfiguredWithCodeRule j) {
         GlobalConfig config = GlobalConfig.get();
 
         assertNotNull(config);
@@ -35,7 +33,8 @@ public class DockerWorkflowSymbolTest {
 
     @Test
     @Issue("1260")
-    public void export_global_definition() throws Exception {
+    @ConfiguredWithCode("DockerWorkflowSymbol.yml")
+    void export_global_definition(JenkinsConfiguredWithCodeRule j) throws Exception {
         ConfiguratorRegistry registry = ConfiguratorRegistry.get();
         ConfigurationContext context = new ConfigurationContext(registry);
         CNode yourAttribute = getUnclassifiedRoot(context).get("pipeline-model-docker");
@@ -46,5 +45,4 @@ public class DockerWorkflowSymbolTest {
 
         assertThat(exported, is(expected));
     }
-
 }

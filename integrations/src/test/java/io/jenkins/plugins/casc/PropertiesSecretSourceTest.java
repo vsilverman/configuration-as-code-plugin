@@ -1,13 +1,15 @@
 package io.jenkins.plugins.casc;
 
+import static org.junit.Assert.assertEquals;
+
 import com.cloudbees.plugins.credentials.CredentialsProvider;
 import com.cloudbees.plugins.credentials.common.UsernamePasswordCredentials;
 import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
 import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
@@ -17,23 +19,22 @@ import org.junit.Test;
 import org.junit.contrib.java.lang.system.EnvironmentVariables;
 import org.junit.rules.RuleChain;
 
-import static org.junit.Assert.assertEquals;
-
 public class PropertiesSecretSourceTest {
 
     private static final String USERNAME_SECRET = "ken";
 
     @Rule
     public RuleChain chain = RuleChain.outerRule(new EnvironmentVariables()
-        .set("SECRETS_FILE", getClass().getResource("secrets.properties").getFile()))
-        .around(new JenkinsConfiguredWithCodeRule());
+                    .set(
+                            "SECRETS_FILE",
+                            getClass().getResource("secrets.properties").getFile()))
+            .around(new JenkinsConfiguredWithCodeRule());
 
     @Test
     @ConfiguredWithCode("PropertiesSecretSourceTest.yaml")
     public void testReadingSecretsFromProperties() {
-        List<UsernamePasswordCredentials> credentialList = CredentialsProvider
-            .lookupCredentials(UsernamePasswordCredentials.class,
-                Jenkins.getInstanceOrNull(), null, Collections.emptyList());
+        List<UsernamePasswordCredentials> credentialList = CredentialsProvider.lookupCredentials(
+                UsernamePasswordCredentials.class, Jenkins.getInstanceOrNull(), null, Collections.emptyList());
         assertEquals(1, credentialList.size());
 
         UsernamePasswordCredentials credentials = credentialList.get(0);
@@ -46,9 +47,9 @@ public class PropertiesSecretSourceTest {
     @Test
     @ConfiguredWithCode("PropertiesSecretSourceTest.yaml")
     public void testSecretsFromPropertiesAreUpdatedAfterReload() throws Exception {
-        File secretsFile =  new File(getClass().getResource("secrets.properties").getFile());
+        File secretsFile = new File(getClass().getResource("secrets.properties").getFile());
         Properties secrets = new Properties();
-        InputStream inputStream = new FileInputStream(secretsFile);
+        InputStream inputStream = Files.newInputStream(secretsFile.toPath());
         secrets.load(inputStream);
 
         FileWriter fileWriter = new FileWriter(secretsFile);
@@ -59,11 +60,13 @@ public class PropertiesSecretSourceTest {
         try {
             secrets.store(fileWriter, "store to properties file");
 
-            ConfigurationAsCode.get().configure(this.getClass().getResource("PropertiesSecretSourceTest.yaml").toString());
+            ConfigurationAsCode.get()
+                    .configure(this.getClass()
+                            .getResource("PropertiesSecretSourceTest.yaml")
+                            .toString());
 
-            List<UsernamePasswordCredentials> credentialList = CredentialsProvider
-                .lookupCredentials(UsernamePasswordCredentials.class,
-                    Jenkins.getInstanceOrNull(), null, Collections.emptyList());
+            List<UsernamePasswordCredentials> credentialList = CredentialsProvider.lookupCredentials(
+                    UsernamePasswordCredentials.class, Jenkins.getInstanceOrNull(), null, Collections.emptyList());
             assertEquals(1, credentialList.size());
 
             UsernamePasswordCredentials credentials = credentialList.get(0);

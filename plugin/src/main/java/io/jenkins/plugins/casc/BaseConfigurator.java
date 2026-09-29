@@ -1,5 +1,8 @@
 package io.jenkins.plugins.casc;
 
+import static java.lang.reflect.Array.newInstance;
+import static java.lang.reflect.Array.set;
+
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.BulkChange;
 import hudson.model.Describable;
@@ -22,21 +25,24 @@ import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.kohsuke.accmod.AccessRestriction;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.Beta;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.accmod.restrictions.None;
 
 /**
@@ -47,7 +53,6 @@ import org.kohsuke.accmod.restrictions.None;
  *
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
-
 public abstract class BaseConfigurator<T> implements Configurator<T> {
 
     private static final Logger LOGGER = Logger.getLogger(BaseConfigurator.class.getName());
@@ -55,12 +60,14 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
     @NonNull
     public Set<Attribute<T, ?>> describe() {
 
-        Map<String, Attribute<T,?>> attributes = new HashMap<>();
+        Map<String, Attribute<T, ?>> attributes = new HashMap<>();
         final Set<String> exclusions = exclusions();
 
         for (Field field : getTarget().getFields()) {
             final String name = field.getName();
-            if (exclusions.contains(name)) continue;
+            if (exclusions.contains(name)) {
+                continue;
+            }
 
             if (PersistedList.class.isAssignableFrom(field.getType())) {
                 if (Modifier.isTransient(field.getModifiers())) {
@@ -75,32 +82,94 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
         }
 
         final Class<T> target = getTarget();
+        Map<String, List<Method>> methodsByProperty = new HashMap<>();
         // Resolve the methods and merging overrides to more concretized signatures
         // because the methods can to have been overridden with concretized type
-        // TODO: Overloaded setters with different types can corrupt this logic
         for (Method method : target.getMethods()) {
             final String methodName = method.getName();
-            TypePair type;
-            if (method.getParameterCount() == 0 && methodName.startsWith("get")
+            if (method.getParameterCount() == 0
+                    && methodName.startsWith("get")
                     && PersistedList.class.isAssignableFrom(method.getReturnType())) {
-                type = TypePair.ofReturnType(method);
-            } else if (method.getParameterCount() != 1 || !methodName.startsWith("set")) {
-                // Not an accessor, ignore
+                String name = StringUtils.uncapitalize(methodName.substring(3));
+                if (exclusions.contains(name)) {
+                    continue;
+                }
+
+                TypePair type = TypePair.ofReturnType(method);
+                @SuppressWarnings("unchecked")
+                Attribute<T, ?> attribute = (Attribute<T, ?>) createAttribute(name, type);
+
+                if (attribute != null) {
+                    attribute.deprecated(method.getAnnotation(Deprecated.class) != null);
+                    final Restricted r = method.getAnnotation(Restricted.class);
+                    if (r != null) {
+                        attribute.restrictions(r.value());
+                    }
+                    attributes.putIfAbsent(name, attribute);
+                }
                 continue;
-            } else {
-                type = TypePair.ofParameter(method, 0);
             }
 
-            final String s = methodName.substring(3);
-            final String name = StringUtils.uncapitalize(s);
-            if (exclusions.contains(name)) continue;
+            if (method.getParameterCount() == 1 && methodName.startsWith("set")) {
+                String propertySuffix = methodName.substring(3);
+                final String name = StringUtils.uncapitalize(propertySuffix);
 
-            if (!hasGetter(target, s)) {
-                // Looks like a property but no actual getter method we can use to read value
+                if (exclusions.contains(name)) {
+                    continue;
+                }
+                methodsByProperty
+                        .computeIfAbsent(propertySuffix, k -> new ArrayList<>())
+                        .add(method);
+            }
+        }
+
+        for (Map.Entry<String, List<Method>> entry : methodsByProperty.entrySet()) {
+            final String propertySuffix = entry.getKey();
+            final String name = StringUtils.uncapitalize(propertySuffix);
+
+            Method g = findGetter(target, propertySuffix);
+
+            if (g == null) {
                 continue;
             }
 
-            LOGGER.log(Level.FINER, "Processing {0} property", name);
+            Class<?> getterRawType = g.getReturnType();
+
+            List<Method> candidateSetters = entry.getValue().stream()
+                    .filter(m -> {
+                        Class<?> paramType = m.getParameterTypes()[0];
+                        return isSameType(paramType, getterRawType)
+                                || getterRawType.isAssignableFrom(paramType)
+                                || paramType.isAssignableFrom(getterRawType);
+                    })
+                    .collect(Collectors.toList());
+
+            if (candidateSetters.isEmpty()) {
+                candidateSetters = entry.getValue();
+            }
+
+            Method bestMethod = resolveBestSetter(candidateSetters, getterRawType);
+            TypePair type = TypePair.ofParameter(bestMethod, 0);
+
+            TypePair getterType = TypePair.ofReturnType(g);
+            if (type.rawType.isAssignableFrom(getterType.rawType)) {
+                Class<?> setterComponent = getComponentType(type);
+
+                boolean setterIsUntyped =
+                        setterComponent == null || setterComponent == Object.class || setterComponent == type.rawType;
+
+                if (setterIsUntyped) {
+                    Class<?> getterComponent = getComponentType(getterType);
+
+                    boolean getterIsTyped = getterComponent != null
+                            && getterComponent != Object.class
+                            && getterComponent != getterType.rawType;
+
+                    if (getterIsTyped) {
+                        type = new TypePair(getterType.type, type.rawType);
+                    }
+                }
+            }
 
             if (Map.class.isAssignableFrom(type.rawType)) {
                 // yaml has support for Maps, but as nobody seem to like them we agreed not to support them
@@ -108,17 +177,45 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
                 continue;
             }
 
-            Attribute attribute = createAttribute(name, type);
-            if (attribute == null) continue;
+            final TypePair finalType = type;
 
-            attribute.deprecated(method.getAnnotation(Deprecated.class) != null);
-            final Restricted r = method.getAnnotation(Restricted.class);
-            if (r != null) attribute.restrictions(r.value());
+            @SuppressWarnings("unchecked")
+            Attribute<T, Object> rawAttribute = (Attribute<T, Object>) createAttribute(name, type);
+            if (rawAttribute == null) {
+                continue;
+            }
+            rawAttribute.setter((targetInstance, value) -> {
+                Object finalValue = value;
 
-            Attribute prevAttribute = attributes.get(name);
-            // Replace the method if it have more concretized type
-            if (prevAttribute == null || prevAttribute.type.isAssignableFrom(attribute.type)) {
-                attributes.put(name, attribute);
+                if (value instanceof Collection<?> collection) {
+                    if (finalType.rawType.isArray()) {
+                        Object array = newInstance(rawAttribute.getType(), collection.size());
+                        int i = 0;
+                        for (Object item : collection) {
+                            set(array, i++, item);
+                        }
+                        finalValue = array;
+
+                    } else if (SortedSet.class.isAssignableFrom(finalType.rawType)) {
+                        finalValue = new TreeSet<>(collection);
+
+                    } else if (Set.class.isAssignableFrom(finalType.rawType)) {
+                        finalValue = new LinkedHashSet<>(collection);
+                    }
+                }
+
+                bestMethod.invoke(targetInstance, finalValue);
+            });
+
+            rawAttribute.deprecated(bestMethod.getAnnotation(Deprecated.class) != null);
+            final Restricted r = bestMethod.getAnnotation(Restricted.class);
+            if (r != null) {
+                rawAttribute.restrictions(r.value());
+            }
+
+            Attribute<T, ?> prevAttribute = attributes.get(name);
+            if (prevAttribute == null || ((Class<?>) prevAttribute.type).isAssignableFrom(rawAttribute.type)) {
+                attributes.put(name, rawAttribute);
             }
         }
 
@@ -128,12 +225,25 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
     /**
      * Check if target class has a Getter method for property s
      */
-    private boolean hasGetter(Class<T> c, String s) {
-        List<String> candidates = Arrays.asList("get"+s, "is"+s);
-        for( Method m : c.getMethods() )
-            if (m.getParameterCount() == 0 && candidates.contains(m.getName()))
-                return true;
-        return false;
+    private Method findGetter(Class<T> c, String s) {
+        String getMethod = "get" + s;
+        String isMethod = "is" + s;
+
+        for (Method m : c.getMethods()) {
+            if (m.getParameterCount() == 0) {
+                if (m.getName().equals(getMethod)) {
+                    return m;
+                }
+
+                if (m.getName().equals(isMethod)) {
+                    Class<?> returnType = m.getReturnType();
+                    if (returnType == boolean.class || returnType == Boolean.class) {
+                        return m;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -145,9 +255,7 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
 
     protected Attribute createAttribute(String name, final TypePair type) {
 
-        boolean multiple =
-                type.rawType.isArray()
-            ||  Collection.class.isAssignableFrom(type.rawType);
+        boolean multiple = type.rawType.isArray() || Collection.class.isAssignableFrom(type.rawType);
 
         // If attribute is a Collection|Array of T, we need to introspect further to determine T
         Class c = multiple ? getComponentType(type) : type.rawType;
@@ -166,7 +274,9 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
         if (!c.isPrimitive() && !c.isEnum() && Modifier.isAbstract(c.getModifiers())) {
             if (!Describable.class.isAssignableFrom(c)) {
                 // Not a Describable, so we don't know how to detect concrete implementation type
-                LOGGER.warning("Can't handle "+getTarget()+"#"+name+": type is abstract but not Describable.");
+                LOGGER.log(
+                        Level.FINE,
+                        "Can't handle " + getTarget() + "#" + name + ": type is abstract but not Describable.");
                 return null;
             }
             attribute = new DescribableAttribute(name, c);
@@ -253,9 +363,9 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
     /**
      * Build or identify the target component this configurator has to handle based on the provided configuration node.
      * @param mapping configuration for target component. Implementation may consume some entries to create a fresh new instance.
-     * @param context
+     * @param context Fully configured Jenkins object used as the starting point for this configuration.
      * @return instance to be configured, but not yet fully configured, see {@link #configure(Mapping, Object, boolean, ConfigurationContext)}
-     * @throws ConfiguratorException
+     * @throws ConfiguratorException something went wrong...
      */
     protected abstract T instance(Mapping mapping, ConfigurationContext context) throws ConfiguratorException;
 
@@ -265,11 +375,11 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
         final Mapping mapping = (c != null ? c.asMapping() : Mapping.EMPTY);
         final T instance = instance(mapping, context);
         if (instance instanceof Saveable) {
-            try (BulkChange bc = new BulkChange((Saveable) instance) ){
+            try (BulkChange bc = new BulkChange((Saveable) instance)) {
                 configure(mapping, instance, false, context);
                 bc.commit();
             } catch (IOException e) {
-                throw new ConfiguratorException("Failed to save "+instance, e);
+                throw new ConfiguratorException("Failed to save " + instance, e);
             }
         } else {
             configure(mapping, instance, false, context);
@@ -277,7 +387,6 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
 
         return instance;
     }
-
 
     @Override
     public T check(CNode c, ConfigurationContext context) throws ConfiguratorException {
@@ -292,13 +401,15 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
      * @param config configuration to apply. Can be partial if {@link #instance(Mapping, ConfigurationContext)} did already used some entries
      * @param instance target instance to configure
      * @param dryrun only check configuration is valid regarding target component. Don't actually apply changes to jenkins controller instance
-     * @param context
+     * @param context Fully configured Jenkins object used as the starting point for this configuration.
      * @throws ConfiguratorException something went wrong...
      */
-    protected void configure(Mapping config, T instance, boolean dryrun, ConfigurationContext context) throws ConfiguratorException {
-        final Set<Attribute<T,?>> attributes = describe();
-        List<Attribute<T, ?>> sortedAttributes = attributes.stream().sorted(Configurator.extensionOrdinalSort()).collect(Collectors.toList());
-        for (Attribute<T,?> attribute : sortedAttributes) {
+    protected void configure(Mapping config, T instance, boolean dryrun, ConfigurationContext context)
+            throws ConfiguratorException {
+        final Set<Attribute<T, ?>> attributes = describe();
+        List<Attribute<T, ?>> sortedAttributes =
+                attributes.stream().sorted(Configurator.extensionOrdinalSort()).collect(Collectors.toList());
+        for (Attribute<T, ?> attribute : sortedAttributes) {
 
             final String name = attribute.getName();
             CNode sub = removeIgnoreCase(config, name);
@@ -306,7 +417,8 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
                 for (String alias : attribute.aliases) {
                     sub = removeIgnoreCase(config, alias);
                     if (sub != null) {
-                        context.warning(sub, "'"+alias+"' is an obsolete attribute name, please use '" + name + "'");
+                        context.warning(
+                                sub, "'" + alias + "' is an obsolete attribute name, please use '" + name + "'");
                         break;
                     }
                 }
@@ -315,20 +427,23 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
             if (sub != null) {
 
                 if (attribute.isDeprecated()) {
-                    context.warning(config, "'"+attribute.getName()+"' is deprecated");
+                    context.warning(config, "'" + attribute.getName() + "' is deprecated");
                     if (context.getDeprecated() == ConfigurationContext.Deprecation.reject) {
-                        throw new ConfiguratorException("'"+attribute.getName()+"' is deprecated");
+                        throw new ConfiguratorException("'" + attribute.getName() + "' is deprecated");
                     }
                 }
 
                 for (Class<? extends AccessRestriction> r : attribute.getRestrictions()) {
-                    if (r == None.class) continue;
+                    if (r == None.class) {
+                        continue;
+                    }
                     if (r == Beta.class && context.getRestricted() == ConfigurationContext.Restriction.beta) {
                         continue;
                     }
-                    context.warning(config, "'"+attribute.getName()+"' is restricted: " + r.getSimpleName());
+                    context.warning(config, "'" + attribute.getName() + "' is restricted: " + r.getSimpleName());
                     if (context.getRestricted() == ConfigurationContext.Restriction.reject) {
-                        throw new ConfiguratorException("'"+attribute.getName()+"' is restricted: " + r.getSimpleName());
+                        throw new ConfiguratorException(
+                                "'" + attribute.getName() + "' is restricted: " + r.getSimpleName());
                     }
                 }
 
@@ -336,27 +451,39 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
                 final Configurator configurator = context.lookupOrFail(k);
 
                 final Object valueToSet;
-                if (attribute.isMultiple()) {
-                    List<Object> values = new ArrayList<>();
-                    for (CNode o : sub.asSequence()) {
-                        Object value = dryrun
-                            ? configurator.check(o, context)
-                            : configurator.configure(o, context);
-                        values.add(value);
+                try {
+                    if (attribute.isMultiple()) {
+                        List<Object> values = new ArrayList<>();
+                        for (CNode o : sub.asSequence()) {
+                            Object value = dryrun ? configurator.check(o, context) : configurator.configure(o, context);
+                            values.add(value);
+                        }
+                        valueToSet = values;
+                    } else {
+                        valueToSet = dryrun ? configurator.check(sub, context) : configurator.configure(sub, context);
                     }
-                    valueToSet= values;
-                } else {
-                    valueToSet = dryrun
-                        ? configurator.check(sub, context)
-                        : configurator.configure(sub, context);
-                }
 
-                if (!dryrun) {
-                    try {
-                        ((Attribute) attribute).setValue(instance, valueToSet); // require type erasure to set Object vs ?
-                    } catch (Exception ex) {
-                        throw new ConfiguratorException(configurator, "Failed to set attribute " + attribute, ex);
+                    if (!dryrun) {
+                        ((Attribute) attribute).setValue(instance, valueToSet);
                     }
+                } catch (ConfiguratorException ex) {
+                    if (ex instanceof UnknownAttributesException) {
+                        throw ex;
+                    }
+                    String childMessage = ex.getErrorMessage();
+
+                    String message = StringUtils.isNotBlank(childMessage)
+                            ? "Failed to configure '" + attribute.getName() + "': " + childMessage
+                            : "Failed to configure attribute '" + attribute.getName() + "'";
+
+                    throw ConfiguratorException.from(sub, configurator, attribute.getName(), message, ex.getCause());
+                } catch (Exception ex) {
+                    throw ConfiguratorException.from(
+                            sub,
+                            this,
+                            attribute.getName(),
+                            "Failed to set attribute '" + attribute.getName() + "'",
+                            ex);
                 }
             }
         }
@@ -367,12 +494,16 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
     protected final void handleUnknown(Mapping config, ConfigurationContext context) throws ConfiguratorException {
         if (!config.isEmpty()) {
             final String invalid = StringUtils.join(config.keySet(), ',');
-            final String message = "Invalid configuration elements for type " + getTarget() + " : " + invalid + ".\n"
-                    + "Available attributes : " + StringUtils.join(getAttributes().stream().map(Attribute::getName).collect(Collectors.toList()), ", ");
+            List<String> validAttributes =
+                    getAttributes().stream().map(Attribute::getName).collect(Collectors.toList());
+            String baseErrorMessage = "Invalid configuration elements for type: ";
+            final String message = baseErrorMessage + getTarget() + " : " + invalid + ".\n"
+                    + "Available attributes : "
+                    + StringUtils.join(validAttributes, ", ");
             context.warning(config, message);
             switch (context.getUnknown()) {
                 case reject:
-                    throw new ConfiguratorException(message);
+                    throw new UnknownAttributesException(this, baseErrorMessage, message, invalid, validAttributes);
 
                 case warn:
                     LOGGER.warning(message);
@@ -386,7 +517,9 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
 
         Mapping mapping = new Mapping();
         for (Attribute attribute : getAttributes()) {
-            if (attribute.equals(instance, reference)) continue;
+            if (attribute.equals(instance, reference)) {
+                continue;
+            }
             mapping.put(attribute.getName(), attribute.describe(instance, context));
         }
         return mapping;
@@ -408,9 +541,9 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
         /**
          * Erasure of {@link #type}
          */
-        final Class rawType;
+        final Class<?> rawType;
 
-        public TypePair(Type type, Class rawType) {
+        public TypePair(Type type, Class<?> rawType) {
             this.rawType = rawType;
             this.type = type;
         }
@@ -425,13 +558,13 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
         }
 
         public static TypePair of(Parameter parameter) {
-            return new TypePair(parameter.getParameterizedType(), parameter.getType());        }
+            return new TypePair(parameter.getParameterizedType(), parameter.getType());
+        }
 
         public static TypePair of(Field field) {
             return new TypePair(field.getGenericType(), field.getType());
         }
     }
-
 
     @Override
     public boolean equals(Object obj) {
@@ -446,4 +579,100 @@ public abstract class BaseConfigurator<T> implements Configurator<T> {
         return getTarget().hashCode();
     }
 
+    @Restricted(NoExternalUse.class)
+    Method resolveBestSetter(List<Method> methods, Class<?> getterRawType) {
+        List<Method> realMethods =
+                methods.stream().filter(m -> !m.isBridge() && !m.isSynthetic()).collect(Collectors.toList());
+        if (!realMethods.isEmpty()) {
+            methods = realMethods;
+        }
+        if (methods.size() == 1) {
+            return methods.get(0);
+        }
+
+        if (getterRawType != null) {
+            for (Method m : methods) {
+                if (isSameType(m.getParameterTypes()[0], getterRawType)) {
+                    return m;
+                }
+            }
+        }
+        List<Method> arrayMethods =
+                methods.stream().filter(m -> m.getParameterTypes()[0].isArray()).collect(Collectors.toList());
+        if (!arrayMethods.isEmpty()) {
+            methods = arrayMethods;
+        }
+
+        Method best = null;
+        Class<?> bestType = null;
+
+        for (Method m : methods) {
+            Class<?> currentType = m.getParameterTypes()[0];
+
+            if (best == null) {
+                best = m;
+                bestType = currentType;
+                continue;
+            }
+
+            if (bestType.isAssignableFrom(currentType)) {
+                best = m;
+                bestType = currentType;
+            } else if (!currentType.isAssignableFrom(bestType)) {
+                boolean currentMatch = (getterRawType != null && getterRawType.isAssignableFrom(currentType));
+                boolean bestMatch = (getterRawType != null && getterRawType.isAssignableFrom(bestType));
+
+                if (currentMatch == bestMatch
+                        && ((!currentType.isInterface() && bestType.isInterface())
+                                || (currentType.isInterface() == bestType.isInterface()
+                                        && currentType.getName().compareTo(bestType.getName()) < 0))) {
+
+                    best = m;
+                    bestType = currentType;
+                }
+            }
+        }
+        return best;
+    }
+
+    private boolean isSameType(Class<?> a, Class<?> b) {
+        if (a == b) {
+            return true;
+        }
+        if (a.isPrimitive() && !b.isPrimitive()) {
+            return isWrapper(b, a);
+        }
+        if (b.isPrimitive() && !a.isPrimitive()) {
+            return isWrapper(a, b);
+        }
+        return false;
+    }
+
+    private boolean isWrapper(Class<?> wrapper, Class<?> primitive) {
+        if (primitive == int.class) {
+            return wrapper == Integer.class;
+        }
+        if (primitive == boolean.class) {
+            return wrapper == Boolean.class;
+        }
+        if (primitive == long.class) {
+            return wrapper == Long.class;
+        }
+        if (primitive == double.class) {
+            return wrapper == Double.class;
+        }
+        if (primitive == float.class) {
+            return wrapper == Float.class;
+        }
+        if (primitive == byte.class) {
+            return wrapper == Byte.class;
+        }
+        if (primitive == char.class) {
+            return wrapper == Character.class;
+        }
+        if (primitive == short.class) {
+            return wrapper == Short.class;
+        }
+        return false;
+    }
 }

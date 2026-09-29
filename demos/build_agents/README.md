@@ -13,11 +13,13 @@ jenkins:
         name: "utility-node"
         remoteFS: "/home/user1"
         launcher:
-          jnlp:
+          inbound:
+            webSocket: true
+            tunnel: some.proxy
             workDirSettings:
               disabled: true
               failIfWorkDirIsMissing: false
-              internalDir: "remoting"
+              internalDir: "remoting2"
               workDirPath: "/tmp"
 
     - permanent:
@@ -27,7 +29,7 @@ jenkins:
         numExecutors: 4
         remoteFS: "/home/user2"
         launcher:
-          SSHLauncher:
+          ssh:
             host: "192.168.1.1"
             port: 22
             credentialsId: test

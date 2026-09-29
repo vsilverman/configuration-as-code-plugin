@@ -1,5 +1,6 @@
 package io.jenkins.plugins.casc.impl.configurators;
 
+import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.model.Descriptor;
 import hudson.util.Secret;
@@ -11,6 +12,8 @@ import io.jenkins.plugins.casc.ConfiguratorException;
 import io.jenkins.plugins.casc.impl.attributes.DescribableAttribute;
 import io.jenkins.plugins.casc.model.CNode;
 import io.jenkins.plugins.casc.model.Mapping;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -25,27 +28,40 @@ import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.annotation.CheckForNull;
-import javax.annotation.Nonnull;
-import javax.annotation.ParametersAreNonnullByDefault;
-import javax.annotation.PostConstruct;
 import jenkins.model.Jenkins;
 import org.kohsuke.stapler.ClassDescriptor;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.Stapler;
 
-
 /**
  * A generic {@link Configurator} to configure components with a {@link org.kohsuke.stapler.DataBoundConstructor}.
- * Intended to replicate Stapler's request-to-instance lifecycle, including {@link PostConstruct} init methods.
+ * Intended to replicate Stapler's request-to-instance lifecycle, including PostConstruct init methods.
  * Will rely on <a href="https://github.com/jenkinsci/jep/tree/master/jep/205">JEP-205</a> once implemented
  *
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
-
 public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
 
     private static final Logger LOGGER = Logger.getLogger(DataBoundConfigurator.class.getName());
+
+    // Avoid compile-time dependencies
+    private static final Set<String> NONNULL_ANNOTATIONS =
+            Set.of("jakarta.annotation.Nonnull", "javax.annotation.Nonnull");
+    private static final Set<String> NULLABLE_ANNOTATIONS =
+            Set.of("jakarta.annotation.Nullable", "javax.annotation.CheckForNull");
+    private static final Set<String> PARAMETERS_ARE_NONNULL_ANNOTATIONS =
+            Set.of("javax.annotation.ParametersAreNonnullByDefault");
+    private static final Set<String> POST_CONSTRUCT_ANNOTATIONS =
+            Set.of("jakarta.annotation.PostConstruct", "javax.annotation.PostConstruct");
+
+    private static boolean hasAnnotation(AnnotatedElement element, Set<String> annotationNames) {
+        for (Annotation ann : element.getAnnotations()) {
+            if (annotationNames.contains(ann.annotationType().getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private final Class<T> target;
 
@@ -56,10 +72,11 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
     @CheckForNull
     public static Constructor getDataBoundConstructor(@NonNull Class type) {
         for (Constructor c : type.getConstructors()) {
-            if (c.getAnnotation(DataBoundConstructor.class) != null) return c;
+            if (c.getAnnotation(DataBoundConstructor.class) != null) {
+                return c;
+            }
         }
         return null;
-
     }
 
     @Override
@@ -82,7 +99,7 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
         T object = super.configure(c, context);
 
         for (Method method : target.getMethods()) {
-            if (method.getParameterCount() == 0 && method.getAnnotation(PostConstruct.class) != null) {
+            if (method.getParameterCount() == 0 && hasAnnotation(method, POST_CONSTRUCT_ANNOTATIONS)) {
                 try {
                     method.invoke(object, null);
                 } catch (IllegalAccessException | InvocationTargetException e) {
@@ -100,7 +117,8 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
         return super.configure(config, context);
     }
 
-    private T tryConstructor(Constructor<T> constructor, Mapping config, ConfigurationContext context) throws ConfiguratorException {
+    private T tryConstructor(Constructor<T> constructor, Mapping config, ConfigurationContext context)
+            throws ConfiguratorException {
         final Parameter[] parameters = constructor.getParameters();
         final String[] names = ClassDescriptor.loadParameterNames(constructor);
         Object[] args = new Object[names.length];
@@ -114,19 +132,24 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
                 final Class t = parameters[i].getType();
 
                 Class<?> clazz = constructor.getDeclaringClass();
-                if (value == null && (parameters[i].isAnnotationPresent(Nonnull.class)   ||
-                    constructor.isAnnotationPresent(ParametersAreNonnullByDefault.class) ||
-                    clazz.isAnnotationPresent(ParametersAreNonnullByDefault.class)       ||
-                    clazz.getPackage().isAnnotationPresent(ParametersAreNonnullByDefault.class) &&
-                        !parameters[i].isAnnotationPresent(CheckForNull.class))) {
+                if (value == null
+                        && (hasAnnotation(parameters[i], NONNULL_ANNOTATIONS)
+                                || hasAnnotation(constructor, PARAMETERS_ARE_NONNULL_ANNOTATIONS)
+                                || hasAnnotation(clazz, PARAMETERS_ARE_NONNULL_ANNOTATIONS)
+                                || hasAnnotation(clazz.getPackage(), PARAMETERS_ARE_NONNULL_ANNOTATIONS)
+                                        && !hasAnnotation(parameters[i], NULLABLE_ANNOTATIONS))) {
 
                     if (Set.class.isAssignableFrom(t)) {
-                        LOGGER.log(Level.FINER, "The parameter to be set is @Nonnull but is not present; " +
-                                                           "setting equal to empty set.");
+                        LOGGER.log(
+                                Level.FINER,
+                                "The parameter to be set is @Nonnull but is not present; "
+                                        + "setting equal to empty set.");
                         args[i] = Collections.emptySet();
                     } else if (List.class.isAssignableFrom(t)) {
-                        LOGGER.log(Level.FINER, "The parameter to be set is @Nonnull but is not present; " +
-                                                           "setting equal to empty list.");
+                        LOGGER.log(
+                                Level.FINER,
+                                "The parameter to be set is @Nonnull but is not present; "
+                                        + "setting equal to empty list.");
                         args[i] = Collections.emptyList();
                     } else {
                         throw new ConfiguratorException(names[i] + " is required to configure " + target);
@@ -159,8 +182,11 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
                         args[i] = configurator.configure(value, context);
                     }
                     if (LOGGER.isLoggable(Level.FINE)) {
-                        LOGGER.log(Level.FINE, "Setting {0}.{1} = {2}",
-                                new Object[]{target, names[i], t == Secret.class || Attribute.calculateIfSecret(target, names[i]) ? "****" : value});
+                        LOGGER.log(Level.FINE, "Setting {0}.{1} = {2}", new Object[] {
+                            target,
+                            names[i],
+                            t == Secret.class || Attribute.calculateIfSecret(target, names[i]) ? "****" : value
+                        });
                     }
                 } else if (t.isPrimitive()) {
                     args[i] = defaultPrimitiveValue(t);
@@ -171,25 +197,29 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
         final T object;
         try {
             object = constructor.newInstance(args);
-        } catch (IllegalArgumentException | InstantiationException | InvocationTargetException | IllegalAccessException ex) {
+        } catch (IllegalArgumentException
+                | InstantiationException
+                | InvocationTargetException
+                | IllegalAccessException ex) {
             List<String> argumentTypes = new ArrayList<>(args.length);
             for (Object arg : args) {
                 argumentTypes.add(arg != null ? arg.getClass().getName() : "null");
             }
             List<String> parameterTypes = new ArrayList<>(parameters.length);
-            for (Parameter parameter: parameters){
+            for (Parameter parameter : parameters) {
                 parameterTypes.add(parameter.getParameterizedType().getTypeName());
             }
             List<String> expectedParamList = new ArrayList<>(parameters.length);
-            for(int i = 0; i < parameters.length; i++){
+            for (int i = 0; i < parameters.length; i++) {
                 expectedParamList.add(names[i] + " " + parameterTypes.get(i));
             }
-            throw new ConfiguratorException(this,
-                    "Failed to construct instance of " + target +
-                            ".\n Constructor: " + constructor +
-                            ".\n Arguments: " + argumentTypes +
-                            ".\n Expected Parameters: " + String.join(", ",expectedParamList)
-                    , ex);
+            throw new ConfiguratorException(
+                    this,
+                    "Failed to construct instance of " + target + ".\n Constructor: "
+                            + constructor + ".\n Arguments: "
+                            + argumentTypes + ".\n Expected Parameters: "
+                            + String.join(", ", expectedParamList),
+                    ex);
         }
 
         // constructor was successful, so let's removed configuration elements we have consumed doing so.
@@ -230,7 +260,6 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
                 c = c.getSuperclass();
             } while (c != Descriptor.class);
 
-
             if (superclass instanceof ParameterizedType) {
                 final ParameterizedType genericSuperclass = (ParameterizedType) superclass;
                 Type type = genericSuperclass.getActualTypeArguments()[0];
@@ -245,11 +274,10 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
         return super.getImplementedAPI();
     }
 
-
     @NonNull
     @Override
-    public Set<Attribute<T,?>> describe() {
-        final Set<Attribute<T,?>> attributes = super.describe();
+    public Set<Attribute<T, ?>> describe() {
+        final Set<Attribute<T, ?>> attributes = super.describe();
 
         final Constructor constructor = getDataBoundConstructor(target);
 
@@ -259,7 +287,9 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
             for (int i = 0; i < parameters.length; i++) {
                 final Parameter p = parameters[i];
                 final Attribute a = createAttribute(names[i], TypePair.of(p));
-                if (a == null) continue;
+                if (a == null) {
+                    continue;
+                }
                 attributes.add(a);
             }
         }
@@ -271,7 +301,8 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
     @Override
     public CNode describe(T instance, ConfigurationContext context) throws Exception {
 
-        // Here we assume a correctly designed DataBound Object will have required attributes set by DataBoundConstructor
+        // Here we assume a correctly designed DataBound Object will have required attributes set by
+        // DataBoundConstructor
         // and all others using DataBoundSetters. So constructor parameters for sure are part of the description, others
         // need to be compared with default values.
 
@@ -289,8 +320,7 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
                 Object value = a.getValue(instance);
                 if (value != null) {
                     Object converted = Stapler.CONVERT_UTILS.convert(value, a.getType());
-                    if (converted instanceof Collection ||
-                        p.getType().isArray() || !a.isMultiple()) {
+                    if (converted instanceof Collection || p.getType().isArray() || !a.isMultiple()) {
                         args[i] = converted;
                     } else if (Set.class.isAssignableFrom(p.getType())) {
                         args[i] = Collections.singleton(converted);
@@ -312,7 +342,9 @@ public class DataBoundConfigurator<T> extends BaseConfigurator<T> {
 
         // add constructor parameters
         for (int i = 0; i < parameters.length; i++) {
-            if (args[i] == null) continue;
+            if (args[i] == null) {
+                continue;
+            }
             mapping.put(names[i], attributes[i].describe(instance, context));
         }
 

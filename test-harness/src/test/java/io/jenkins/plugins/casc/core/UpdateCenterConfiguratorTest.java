@@ -1,5 +1,8 @@
 package io.jenkins.plugins.casc.core;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 import hudson.model.UpdateCenter;
 import hudson.model.UpdateSite;
 import io.jenkins.plugins.casc.ConfigurationContext;
@@ -7,23 +10,18 @@ import io.jenkins.plugins.casc.Configurator;
 import io.jenkins.plugins.casc.ConfiguratorRegistry;
 import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
 import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
+import io.jenkins.plugins.casc.misc.junit.jupiter.WithJenkinsConfiguredWithCode;
 import io.jenkins.plugins.casc.model.CNode;
 import io.jenkins.plugins.casc.model.Mapping;
 import java.util.List;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-
-public class UpdateCenterConfiguratorTest {
-
-    @Rule
-    public JenkinsConfiguredWithCodeRule j = new JenkinsConfiguredWithCodeRule();
+@WithJenkinsConfiguredWithCode
+class UpdateCenterConfiguratorTest {
 
     @Test
     @ConfiguredWithCode("UpdateCenter.yml")
-    public void shouldSetUpdateCenterSites() throws Exception {
+    void shouldSetUpdateCenterSites(JenkinsConfiguredWithCodeRule j) throws Exception {
         UpdateCenter updateCenter = j.jenkins.getUpdateCenter();
         List<UpdateSite> sites = updateCenter.getSites();
         assertEquals(2, sites.size());
@@ -41,7 +39,5 @@ public class UpdateCenterConfiguratorTest {
         assertNotNull(node);
         Mapping site1 = node.asMapping().get("sites").asSequence().get(1).asMapping();
         assertEquals("experimental", site1.getScalarValue("id"));
-
     }
-
 }

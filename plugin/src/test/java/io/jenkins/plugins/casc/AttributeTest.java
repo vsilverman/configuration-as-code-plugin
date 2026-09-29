@@ -1,41 +1,42 @@
 package io.jenkins.plugins.casc;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import hudson.util.Secret;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.For;
 import org.jvnet.hudson.test.Issue;
-import org.jvnet.hudson.test.LoggerRule;
+import org.jvnet.hudson.test.LogRecorder;
 import org.kohsuke.stapler.DataBoundConstructor;
-
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
 @For(Attribute.class)
 public class AttributeTest {
 
-    @Rule
-    public LoggerRule logging = new LoggerRule();
+    private LogRecorder logging;
 
-    @Before
-    public void tearUp() {
-        logging.record(Logger.getLogger(Attribute.class.getName()), Level.FINEST).capture(2048);
+    @BeforeEach
+    void tearUp() {
+        logging = new LogRecorder()
+                .record(Logger.getLogger(Attribute.class.getName()), Level.FINEST)
+                .capture(2048);
     }
 
-    @After
-    public void tearDown() {
+    @AfterEach
+    void tearDown() {
         for (String entry : logging.getMessages()) {
             System.out.println(entry);
         }
+        logging.close();
     }
 
     @Test
     @Issue("SECURITY-1279")
-    public void checkCommonSecretPatterns() {
+    void checkCommonSecretPatterns() {
         assertFieldIsSecret(WellDefinedField.class, "secretField");
         assertFieldIsSecret(SecretFromGetter.class, "secretField");
         assertFieldIsSecret(SecretFromPublicField.class, "secretField");
@@ -46,14 +47,14 @@ public class AttributeTest {
 
     @Test
     @Issue("SECURITY-1279")
-    public void checkStaticResolution() {
+    void checkStaticResolution() {
         // Field is not secret, but the attribute is secret
         assertFieldIsNotSecret(SecretRenamedFieldFithSecretConstructor.class, "mySecretValue");
     }
 
     @Test
     @Issue("SECURITY-1279")
-    public void checkCommonSecretPatternsForOverrides() {
+    void checkCommonSecretPatternsForOverrides() {
         assertFieldIsSecret(WellDefinedField2.class, "secret");
         assertFieldIsSecret(SecretFromGetter2.class, "secretField");
 
@@ -65,20 +66,30 @@ public class AttributeTest {
 
     @Test
     @Issue("SECURITY-1279")
-    public void checkNonSecretPatterns() {
+    void checkNonSecretPatterns() {
         assertFieldIsNotSecret(NonSecretField.class, "passwordPath");
+    }
+
+    @Test
+    void checkSecretFromSetter() {
+        assertFieldIsSecret(SecretFromSetter.class, "secretField");
+    }
+
+    @Test
+    void checkUnknownClassCondition() {
+        assertFalse(
+                Attribute.calculateIfSecret(null, "someField"),
+                "calculateIfSecret should return false when targetClass is unknown");
     }
 
     public static void assertFieldIsSecret(Class<?> clazz, String fieldName) {
         String displayName = clazz != null ? (clazz.getName() + "#" + fieldName) : fieldName;
-        assertTrue("Field is not secret: " + displayName,
-                Attribute.calculateIfSecret(clazz, fieldName));
+        assertTrue(Attribute.calculateIfSecret(clazz, fieldName), "Field should be a secret: " + displayName);
     }
 
     public static void assertFieldIsNotSecret(Class<?> clazz, String fieldName) {
         String displayName = clazz != null ? (clazz.getName() + "#" + fieldName) : fieldName;
-        assertFalse("Field is a secret while it should not be considered as one: " + displayName,
-                Attribute.calculateIfSecret(clazz, fieldName));
+        assertFalse(Attribute.calculateIfSecret(clazz, fieldName), "Field should not be a secret: " + displayName);
     }
 
     public static class WellDefinedField {
@@ -103,21 +114,22 @@ public class AttributeTest {
 
     public static class SecretFromGetter {
 
-        Secret secretField;
+        private final String hiddenData;
 
         @DataBoundConstructor
         public SecretFromGetter(String secretField) {
-            this.secretField = Secret.fromString(secretField);
+            this.hiddenData = secretField;
         }
 
-        public Secret getSecret() {
-            return secretField;
+        @SuppressWarnings("unused")
+        public Secret getSecretField() {
+            return Secret.fromString(hiddenData);
         }
     }
 
     public static class SecretFromGetter2 extends SecretFromGetter {
-        public SecretFromGetter2(String secret) {
-            super(secret);
+        public SecretFromGetter2(String secretField) {
+            super(secretField);
         }
     }
 
@@ -181,5 +193,41 @@ public class AttributeTest {
         public String getMySecretValue() {
             return mySecretValueField.getPlainText();
         }
+    }
+
+    public static class SecretFromSetter {
+
+        private String secretField;
+
+        @DataBoundConstructor
+        public SecretFromSetter() {}
+
+        @SuppressWarnings("unused")
+        public String getSecretField() {
+            return secretField;
+        }
+
+        @SuppressWarnings("unused")
+        public void setSecretField(Secret secretField) {
+            this.secretField = secretField.getPlainText();
+        }
+    }
+
+    @Test
+    void checkCalculationIsIdempotent() {
+        boolean firstTrue = Attribute.calculateIfSecret(SecretFromSetter.class, "secretField");
+        boolean secondTrue = Attribute.calculateIfSecret(SecretFromSetter.class, "secretField");
+        assertTrue(firstTrue);
+        assertTrue(secondTrue, "Subsequent calls should return the same TRUE result");
+
+        boolean firstFalse = Attribute.calculateIfSecret(NonSecretField.class, "passwordPath");
+        boolean secondFalse = Attribute.calculateIfSecret(NonSecretField.class, "passwordPath");
+        assertFalse(firstFalse);
+        assertFalse(secondFalse, "Subsequent calls should return the same FALSE result");
+
+        boolean firstUnknown = Attribute.calculateIfSecret(null, "someField");
+        boolean secondUnknown = Attribute.calculateIfSecret(null, "someField");
+        assertFalse(firstUnknown);
+        assertFalse(secondUnknown, "Subsequent calls should return the same fallback FALSE result");
     }
 }

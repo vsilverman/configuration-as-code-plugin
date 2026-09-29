@@ -1,5 +1,14 @@
 package io.jenkins.plugins.casc;
 
+import static java.util.Objects.requireNonNull;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.core.IsNot.not;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
 import com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey;
 import com.cloudbees.plugins.credentials.CredentialsProvider;
 import com.cloudbees.plugins.credentials.CredentialsScope;
@@ -12,55 +21,47 @@ import hudson.util.Secret;
 import io.jenkins.plugins.casc.impl.configurators.DataBoundConfigurator;
 import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
 import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
+import io.jenkins.plugins.casc.misc.junit.jupiter.WithJenkinsConfiguredWithCode;
 import io.jenkins.plugins.casc.model.CNode;
 import io.jenkins.plugins.casc.model.Mapping;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import jenkins.model.Jenkins;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.Issue;
 
-import static java.util.Objects.requireNonNull;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.core.IsNot.not;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-
-public class CredentialsTest {
-
-    @Rule
-    public JenkinsConfiguredWithCodeRule j = new JenkinsConfiguredWithCodeRule();
+@WithJenkinsConfiguredWithCode
+class CredentialsTest {
 
     @ConfiguredWithCode("GlobalCredentials.yml")
     @Test
-    public void testGlobalScopedCredentials() {
-        List<StandardUsernamePasswordCredentials> creds = CredentialsProvider.lookupCredentials(StandardUsernamePasswordCredentials.class,Jenkins.getInstanceOrNull(), null, Collections.emptyList());
+    void testGlobalScopedCredentials(JenkinsConfiguredWithCodeRule j) throws Exception {
+        List<StandardUsernamePasswordCredentials> creds = CredentialsProvider.lookupCredentials(
+                StandardUsernamePasswordCredentials.class, Jenkins.getInstanceOrNull(), null, Collections.emptyList());
         assertThat(creds.size(), is(1));
         assertEquals("user1", creds.get(0).getId());
         assertEquals("Administrator", creds.get(0).getUsername());
         assertEquals("secretPassword", creds.get(0).getPassword().getPlainText());
 
-        List<BasicSSHUserPrivateKey> creds2 = CredentialsProvider.lookupCredentials(BasicSSHUserPrivateKey.class,Jenkins.getInstanceOrNull(), null, Collections.emptyList());
+        List<BasicSSHUserPrivateKey> creds2 = CredentialsProvider.lookupCredentials(
+                BasicSSHUserPrivateKey.class, Jenkins.getInstanceOrNull(), null, Collections.emptyList());
         assertThat(creds2.size(), is(1));
         BasicSSHUserPrivateKey basicSSHUserPrivateKey = creds2.get(0);
         assertEquals("agentuser", basicSSHUserPrivateKey.getUsername());
         assertEquals("password", basicSSHUserPrivateKey.getPassphrase().getPlainText());
         assertEquals("ssh private key used to connect ssh slaves", basicSSHUserPrivateKey.getDescription());
         assertThat(basicSSHUserPrivateKey.getPrivateKeySource().getPrivateKeys().size(), is(1));
-        String directKey = basicSSHUserPrivateKey.getPrivateKeySource().getPrivateKeys().get(0);
+        String directKey =
+                basicSSHUserPrivateKey.getPrivateKeySource().getPrivateKeys().get(0);
         assertThat(directKey, is("sp0ds9d+skkfjf"));
-
     }
-
 
     @ConfiguredWithCode("CredentialsWithDomain.yml")
     @Test
-    public void testDomainScopedCredentials() {
-        List<StandardUsernamePasswordCredentials> creds = CredentialsProvider.lookupCredentials(StandardUsernamePasswordCredentials.class,Jenkins.getInstanceOrNull(), null, Collections.emptyList());
+    void testDomainScopedCredentials(JenkinsConfiguredWithCodeRule j) throws Exception {
+        List<StandardUsernamePasswordCredentials> creds = CredentialsProvider.lookupCredentials(
+                StandardUsernamePasswordCredentials.class, Jenkins.getInstanceOrNull(), null, Collections.emptyList());
         assertThat(creds.size(), is(1));
         assertEquals("user1", creds.get(0).getId());
         assertEquals("Administrator", creds.get(0).getUsername());
@@ -69,7 +70,7 @@ public class CredentialsTest {
 
     @Test
     @ConfiguredWithCode("GlobalCredentials.yml")
-    public void testExportFileCredentials() throws Exception {
+    void testExportFileCredentials(JenkinsConfiguredWithCodeRule j) throws Exception {
         ConfiguratorRegistry registry = ConfiguratorRegistry.get();
         ConfigurationContext context = new ConfigurationContext(registry);
         CredentialsRootConfigurator root = ExtensionList.lookupSingleton(CredentialsRootConfigurator.class);
@@ -79,12 +80,17 @@ public class CredentialsTest {
         final Mapping mapping = node.asMapping();
 
         Mapping fileCredential = mapping.get("system")
-            .asMapping()
-            .get("domainCredentials")
-            .asSequence().get(0)
-            .asMapping().get("credentials")
-            .asSequence().get(2)
-            .asMapping().get("file").asMapping();
+                .asMapping()
+                .get("domainCredentials")
+                .asSequence()
+                .get(0)
+                .asMapping()
+                .get("credentials")
+                .asSequence()
+                .get(2)
+                .asMapping()
+                .get("file")
+                .asMapping();
 
         assertThat(fileCredential.getScalarValue("scope"), is("GLOBAL"));
         assertThat(fileCredential.getScalarValue("id"), is("secret-file"));
@@ -94,7 +100,7 @@ public class CredentialsTest {
 
     @ConfiguredWithCode("GlobalCredentials.yml")
     @Test
-    public void testExportSSHCredentials() throws Exception {
+    void testExportSSHCredentials(JenkinsConfiguredWithCodeRule j) throws Exception {
         ConfiguratorRegistry registry = ConfiguratorRegistry.get();
         ConfigurationContext context = new ConfigurationContext(registry);
         CredentialsRootConfigurator root = ExtensionList.lookupSingleton(CredentialsRootConfigurator.class);
@@ -106,10 +112,15 @@ public class CredentialsTest {
         Mapping sshCredential = mapping.get("system")
                 .asMapping()
                 .get("domainCredentials")
-                .asSequence().get(0)
-                .asMapping().get("credentials")
-                .asSequence().get(1)
-                .asMapping().get("basicSSHUserPrivateKey").asMapping();
+                .asSequence()
+                .get(0)
+                .asMapping()
+                .get("credentials")
+                .asSequence()
+                .get(1)
+                .asMapping()
+                .get("basicSSHUserPrivateKey")
+                .asMapping();
 
         assertThat(sshCredential.getScalarValue("scope"), is("SYSTEM"));
         assertThat(sshCredential.getScalarValue("id"), is("agent-private-key"));
@@ -117,10 +128,13 @@ public class CredentialsTest {
 
         String passphrase = sshCredential.getScalarValue("passphrase");
         assertThat(passphrase, not("password"));
-        assertThat(requireNonNull(Secret.decrypt(passphrase), "Failed to decrypt the password from " + passphrase)
-                .getPlainText(), is("password"));
+        assertThat(
+                requireNonNull(Secret.decrypt(passphrase), "Failed to decrypt the password from " + passphrase)
+                        .getPlainText(),
+                is("password"));
 
-        String sshKeyExported = sshCredential.get("privateKeySource")
+        String sshKeyExported = sshCredential
+                .get("privateKeySource")
                 .asMapping()
                 .get("directEntry")
                 .asMapping()
@@ -134,22 +148,22 @@ public class CredentialsTest {
 
     @Test
     @Issue("SECURITY-1404")
-    public void checkUsernamePasswordIsSecret() {
+    void checkUsernamePasswordIsSecret(JenkinsConfiguredWithCodeRule j) throws Exception {
         Attribute a = getFromDatabound(UsernamePasswordCredentialsImpl.class, "password");
-        assertTrue("Attribute 'password' should be secret", a.isSecret(
-                new UsernamePasswordCredentialsImpl(CredentialsScope.GLOBAL, "1", "2", "3", "4")));
+        assertTrue(
+                a.isSecret(new UsernamePasswordCredentialsImpl(CredentialsScope.GLOBAL, "1", "2", "3", "4")),
+                "Attribute 'password' should be secret");
     }
 
     @NonNull
-    private <T> Attribute<T,?> getFromDatabound(Class<T> clazz, @NonNull String attributeName) {
+    private <T> Attribute<T, ?> getFromDatabound(Class<T> clazz, @NonNull String attributeName) {
         DataBoundConfigurator<T> cfg = new DataBoundConfigurator<>(clazz);
-        Set<Attribute<T,?>> attributes = cfg.describe();
-        for (Attribute<T,?> a : attributes) {
-            if(attributeName.equals(a.getName())) {
+        Set<Attribute<T, ?>> attributes = cfg.describe();
+        for (Attribute<T, ?> a : attributes) {
+            if (attributeName.equals(a.getName())) {
                 return a;
             }
         }
-        throw new AssertionError("Cannot find databound attribute " + attributeName + " in " + clazz);
+        return fail("Cannot find databound attribute " + attributeName + " in " + clazz);
     }
-
 }

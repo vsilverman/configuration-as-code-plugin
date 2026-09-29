@@ -1,69 +1,178 @@
 package io.jenkins.plugins.casc;
 
-import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
-import org.junit.Rule;
-import org.junit.Test;
-
+import static io.jenkins.plugins.casc.SchemaGeneration.generateSchema;
 import static io.jenkins.plugins.casc.misc.Util.convertYamlFileToJson;
 import static io.jenkins.plugins.casc.misc.Util.validateSchema;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import hudson.Extension;
+import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
+import io.jenkins.plugins.casc.misc.junit.jupiter.WithJenkinsConfiguredWithCode;
+import java.util.List;
+import jenkins.model.GlobalConfiguration;
+import org.jenkinsci.Symbol;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.jupiter.api.Test;
+import org.kohsuke.stapler.DataBoundConstructor;
+import org.kohsuke.stapler.DataBoundSetter;
 
-public class SchemaGenerationTest {
-
-    @Rule
-    public JenkinsConfiguredWithCodeRule j = new JenkinsConfiguredWithCodeRule();
+@WithJenkinsConfiguredWithCode
+@SuppressWarnings("unused")
+class SchemaGenerationTest {
 
     @Test
-    public void validSchemaShouldSucceed() throws Exception {
+    void validSchemaShouldSucceed(JenkinsConfiguredWithCodeRule j) throws Exception {
         assertThat(validateSchema(convertYamlFileToJson(this, "validSchemaConfig.yml")), empty());
     }
 
     @Test
-    public void invalidSchemaShouldNotSucceed() throws Exception {
-        assertThat(validateSchema(convertYamlFileToJson(this, "invalidSchemaConfig.yml")),
-            contains("#/jenkins/numExecutors: expected type: Integer, found: String"));
-    }
-
-    @Test
-    public void rejectsInvalidBaseConfigurator() throws Exception {
-        assertThat(validateSchema(convertYamlFileToJson(this, "invalidBaseConfig.yml")),
-            contains("#: extraneous key [invalidBaseConfigurator] is not permitted"));
-    }
-
-    @Test
-    public void validJenkinsBaseConfigurator() throws Exception {
-        assertThat(validateSchema(convertYamlFileToJson(this, "validJenkinsBaseConfig.yml")),
-            empty());
-    }
-
-    @Test
-    public void symbolResolutionForJenkinsBaseConfigurator() throws Exception {
-        assertThat(validateSchema(convertYamlFileToJson(this, "validJenkinsBaseConfigWithSymbol.yml")),
-            empty());
-    }
-
-    @Test
-    public void validSelfConfigurator() throws Exception {
+    void invalidSchemaShouldNotSucceed(JenkinsConfiguredWithCodeRule j) throws Exception {
         assertThat(
-            validateSchema(convertYamlFileToJson(this, "validSelfConfig.yml")),
-            empty());
+                validateSchema(convertYamlFileToJson(this, "invalidSchemaConfig.yml")),
+                contains("#/jenkins/numExecutors: expected type: Integer, found: String"));
     }
 
     @Test
-    public void attributesNotFlattenedToTopLevel() throws Exception {
+    void rejectsInvalidBaseConfigurator(JenkinsConfiguredWithCodeRule j) throws Exception {
         assertThat(
-            validateSchema(convertYamlFileToJson(this, "attributesNotFlattenedToTop.yml")),
-            contains("#/tool: extraneous key [acceptLicense] is not permitted"));
+                validateSchema(convertYamlFileToJson(this, "invalidBaseConfig.yml")),
+                contains("#: extraneous key [invalidBaseConfigurator] is not permitted"));
     }
 
-//    For testing manually
-//    @Test
-//    public void writeSchema() throws Exception {
-//        BufferedWriter writer = new BufferedWriter(new FileWriter("schema.json"));
-//        writer.write(writeJSONSchema());
-//        writer.close();
-//    }
+    @Test
+    void validJenkinsBaseConfigurator(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertThat(validateSchema(convertYamlFileToJson(this, "validJenkinsBaseConfig.yml")), empty());
+    }
+
+    @Test
+    void symbolResolutionForJenkinsBaseConfigurator(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertThat(validateSchema(convertYamlFileToJson(this, "validJenkinsBaseConfigWithSymbol.yml")), empty());
+    }
+
+    @Test
+    void validSelfConfigurator(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertThat(validateSchema(convertYamlFileToJson(this, "validSelfConfig.yml")), empty());
+    }
+
+    @Test
+    void attributesNotFlattenedToTopLevel(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertThat(
+                validateSchema(convertYamlFileToJson(this, "attributesNotFlattenedToTop.yml")),
+                contains("#/tool: extraneous key [acceptLicense] is not permitted"));
+    }
+
+    @Test
+    void rejectsObsoleteOrUnknownAttributesInHeteroDescribable(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertThat(
+                validateSchema(convertYamlFileToJson(this, "invalidHeteroConfig.yml")),
+                contains(
+                        "#/jenkins/crumbIssuer/standard: extraneous key [someCompletelyFakeProperty] is not permitted"));
+    }
+
+    @Test
+    void arrayAttributesShouldGenerateAsArrays(JenkinsConfiguredWithCodeRule j) {
+        JSONObject schema = SchemaGeneration.generateSchema();
+        JSONObject jenkinsProps =
+                schema.getJSONObject("properties").getJSONObject("jenkins").getJSONObject("properties");
+        JSONObject agentProtocols = jenkinsProps.getJSONObject("agentProtocols");
+
+        assertNotNull(agentProtocols, "agentProtocols should exist in the generated schema");
+        assertEquals("array", agentProtocols.getString("type"), "agentProtocols should be generated as an array type");
+
+        JSONObject items = agentProtocols.getJSONObject("items");
+        assertNotNull(items, "agentProtocols should have an 'items' definition");
+        assertEquals("string", items.getString("type"), "agentProtocols items should be of type string");
+    }
+
+    @Test
+    void itemsRootShouldExposePolymorphicItemSchema(JenkinsConfiguredWithCodeRule j) {
+        JSONObject schema = generateSchema();
+        JSONObject itemsRoot = schema.getJSONObject("properties").getJSONObject("items");
+        JSONObject itemsRootProperties = itemsRoot.getJSONObject("properties");
+
+        assertEquals(
+                "string",
+                itemsRootProperties.getJSONObject("actionOnUndeclaredItems").getString("type"),
+                "actionOnUndeclaredItems should be generated as a string enum");
+        assertEquals(
+                "array",
+                itemsRootProperties.getJSONObject("items").getString("type"),
+                "items should be generated as an array");
+
+        JSONObject itemSchema = itemsRootProperties.getJSONObject("items").getJSONObject("items");
+        JSONObject itemProperties = itemSchema.getJSONObject("properties");
+        assertNotNull(itemProperties.getJSONObject("freestyle"), "freestyle should be present in item schema");
+        assertEquals(
+                "#/definitions/hudson.model.FreeStyleProject",
+                itemProperties.getJSONObject("freestyle").getString("$ref"),
+                "freestyle should reference the FreeStyleProject definition");
+        assertNotNull(
+                itemSchema.getJSONArray("oneOf"), "polymorphic item schema should expose oneOf for item configurators");
+        assertNotNull(
+                schema.getJSONObject("definitions").getJSONObject("hudson.model.FreeStyleProject"),
+                "FreeStyleProject definition should be generated");
+    }
+
+    @Test
+    void arrayEnumAttributesShouldGenerateAsEnumArrays(JenkinsConfiguredWithCodeRule j) {
+        JSONObject schema = generateSchema();
+
+        JSONObject unclassifiedProps =
+                schema.getJSONObject("properties").getJSONObject("unclassified").getJSONObject("properties");
+        JSONObject dummyConfig = unclassifiedProps.getJSONObject("dummyConfig").getJSONObject("properties");
+        JSONObject myEnums = dummyConfig.getJSONObject("myEnums");
+
+        assertNotNull(myEnums, "myEnums should exist in the generated schema");
+        assertEquals("array", myEnums.getString("type"), "myEnums should be generated as an array type");
+
+        JSONObject items = myEnums.getJSONObject("items");
+        assertNotNull(items, "myEnums should have an 'items' definition");
+        assertEquals("string", items.getString("type"), "myEnums items should be of type string");
+
+        JSONArray enumValues = items.getJSONArray("enum");
+        assertEquals(2, enumValues.length());
+        assertEquals("VALUE_A", enumValues.getString(0));
+        assertEquals("VALUE_B", enumValues.getString(1));
+    }
+
+    public enum DummyEnum {
+        VALUE_A,
+        VALUE_B
+    }
+
+    @Extension
+    @Symbol("dummyConfig")
+    public static class DummyConfig extends GlobalConfiguration {
+        private List<DummyEnum> myEnums;
+
+        @DataBoundConstructor
+        public DummyConfig() {}
+
+        public List<DummyEnum> getMyEnums() {
+            return myEnums;
+        }
+
+        @DataBoundSetter
+        public void setMyEnums(List<DummyEnum> myEnums) {
+            this.myEnums = myEnums;
+        }
+    }
+
+    @Test
+    void validArraySchemaShouldSucceed(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertThat(validateSchema(convertYamlFileToJson(this, "validArraySchemaConfig.yml")), empty());
+    }
+
+    //    For testing manually
+    //    @Test
+    //    public void writeSchema() throws Exception {
+    //        BufferedWriter writer = new BufferedWriter(new FileWriter("schema.json"));
+    //        writer.write(writeJSONSchema());
+    //        writer.close();
+    //    }
 }

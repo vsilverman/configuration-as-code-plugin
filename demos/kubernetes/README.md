@@ -15,7 +15,7 @@ jenkins:
   clouds:
     - kubernetes:
         name: "advanced-k8s-config"
-        serverUrl: "https://avanced-k8s-config:443"
+        serverUrl: "https://advanced-k8s-config:443"
         serverCertificate: "serverCertificate"
         skipTlsVerify: true
         credentialsId: "advanced-k8s-credentials"
@@ -34,6 +34,9 @@ jenkins:
             instanceCap: 1234
             idleMinutes: 0
             label: "label"
+            # Enable whether the POD Yaml is displayed in each build log or not, `true` by default.
+            showRawYaml: true
+            
             volumes:
               - hostPathVolume:
                   mountPath: "mountPath"
@@ -78,6 +81,11 @@ jenkins:
               - emptyDirVolume:
                   memory: false
                   mountPath: "/tmp"
+              # Mount the content of the ConfigMap `configmap-name` with the data `config`.
+              - configMapVolume:
+                  configMapName: configmap-name
+                  mountPath: /home/jenkins/.aws/config
+                  subPath: config
             idleMinutes: "1"
             activeDeadlineSeconds: "120"
             slaveConnectTimeout: "1000"

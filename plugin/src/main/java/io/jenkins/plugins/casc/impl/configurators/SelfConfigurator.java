@@ -17,7 +17,8 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
  */
 @Extension(ordinal = Double.MAX_VALUE)
 @Restricted(NoExternalUse.class)
-public class SelfConfigurator extends BaseConfigurator<ConfigurationContext> implements RootElementConfigurator<ConfigurationContext> {
+public class SelfConfigurator extends BaseConfigurator<ConfigurationContext>
+        implements RootElementConfigurator<ConfigurationContext> {
 
     @NonNull
     @Override
@@ -40,7 +41,9 @@ public class SelfConfigurator extends BaseConfigurator<ConfigurationContext> imp
         return context;
     }
 
-    protected void configure(Mapping config, ConfigurationContext instance, boolean dryrun, ConfigurationContext context) throws ConfiguratorException {
+    protected void configure(
+            Mapping config, ConfigurationContext instance, boolean dryrun, ConfigurationContext context)
+            throws ConfiguratorException {
         // ConfigurationContext has to be configured _even_ for dry-run as it determine CasC behaviour
         super.configure(config, instance, false, context);
     }
@@ -48,8 +51,11 @@ public class SelfConfigurator extends BaseConfigurator<ConfigurationContext> imp
     @CheckForNull
     @Override
     public CNode describe(ConfigurationContext instance, ConfigurationContext context) throws Exception {
-        return compare(instance, new ConfigurationContext(null), context);
+        Mapping mapping = new Mapping();
+        mapping.put("version", instance.getVersion().value());
+        mapping.put("deprecated", instance.getDeprecated().name());
+        mapping.put("restricted", instance.getRestricted().name());
+        mapping.put("unknown", instance.getUnknown().name());
+        return mapping;
     }
 }
-
-

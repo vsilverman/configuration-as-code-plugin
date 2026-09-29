@@ -1,27 +1,23 @@
 package io.jenkins.plugins.casc.yaml;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 import hudson.ExtensionList;
 import jenkins.model.Jenkins;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-
-public class MergeStrategyTest {
-
-    @Rule
-    public JenkinsRule j = new JenkinsRule();
+@WithJenkins
+class MergeStrategyTest {
 
     @Test
-    public void haveTheDefaultStrategy() {
-        ExtensionList<MergeStrategy> strategyExtensionList = Jenkins.getInstance()
-            .getExtensionList(MergeStrategy.class);
+    void haveTheDefaultStrategy(JenkinsRule j) {
+        ExtensionList<MergeStrategy> strategyExtensionList = Jenkins.get().getExtensionList(MergeStrategy.class);
 
-        assertTrue("should have at least one strategy",
-            strategyExtensionList.size() > 0);
-        assertNotNull("default merge strategy should not be null",
-            MergeStrategyFactory.getMergeStrategyOrDefault(null));
+        assertFalse(strategyExtensionList.isEmpty(), "should have at least one strategy");
+        assertNotNull(
+                MergeStrategyFactory.getMergeStrategyOrDefault(null), "default merge strategy should not be null");
     }
 }

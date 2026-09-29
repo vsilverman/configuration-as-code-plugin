@@ -31,7 +31,8 @@ jenkins:
         - id: "admin"
           name: "Admin"
           description: "Superwoman"
-          password: "somethingsecret"
+          # Use trim when reading secrets from files that may contain trailing newlines
+          password: "${trim:${readFile:/run/secrets/admin_password}}"
           properties:
             - mailer:
                 emailAddress: "admin3@example.com"
@@ -39,10 +40,10 @@ jenkins:
                 providerId: "default"
             - slack:
                 userId: "ABCDEFGH"
-            #- timezone: # pending https://github.com/jenkinsci/jenkins/pull/4557
-            #    timeZoneName: "Europe/London"
-            #- sshPublicKey: # pending https://github.com/jenkinsci/ssh-cli-auth-module/pull/16
-            #    authorizedKeys: |
-            #      ssh-rsa some-key
+            - timezone:
+                timeZoneName: "Europe/London"
+            - sshPublicKey:
+                authorizedKeys: |
+                  ssh-rsa some-key
   authorizationStrategy: loggedInUsersCanDoAnything
 ```

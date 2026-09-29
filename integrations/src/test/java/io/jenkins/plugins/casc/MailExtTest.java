@@ -1,59 +1,59 @@
 package io.jenkins.plugins.casc;
 
-import hudson.plugins.emailext.ExtendedEmailPublisher;
-import hudson.plugins.emailext.ExtendedEmailPublisherDescriptor;
-import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
-import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
-import io.jenkins.plugins.casc.yaml.YamlSource;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import org.apache.tools.ant.filters.StringInputStream;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.RuleChain;
-import org.jvnet.hudson.test.Issue;
-import org.jvnet.hudson.test.LoggerRule;
-
 import static io.jenkins.plugins.casc.misc.Util.assertLogContains;
 import static io.jenkins.plugins.casc.misc.Util.assertNotInLog;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import hudson.plugins.emailext.ExtendedEmailPublisher;
+import hudson.plugins.emailext.ExtendedEmailPublisherDescriptor;
+import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
+import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
+import io.jenkins.plugins.casc.misc.junit.jupiter.WithJenkinsConfiguredWithCode;
+import io.jenkins.plugins.casc.yaml.YamlSource;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import org.apache.tools.ant.filters.StringInputStream;
+import org.junit.jupiter.api.Test;
+import org.jvnet.hudson.test.Issue;
+import org.jvnet.hudson.test.LogRecorder;
 
-public class MailExtTest {
+@WithJenkinsConfiguredWithCode
+class MailExtTest {
 
-    public JenkinsConfiguredWithCodeRule j = new JenkinsConfiguredWithCodeRule();
-    public LoggerRule logging = new LoggerRule();
-
-    @Rule
-    public RuleChain chain= RuleChain
-            .outerRule(logging.record(Logger.getLogger(Attribute.class.getName()), Level.FINER).capture(2048))
-            .around(j);
+    private final LogRecorder logging = new LogRecorder()
+            .record(Logger.getLogger(Attribute.class.getName()), Level.FINER)
+            .capture(2048);
 
     private static final String SMTP_PASSWORD = "myPassword";
 
     @Test
     @ConfiguredWithCode("MailExtTest.yml")
     @Issue("SECURITY-1404")
-    public void shouldNotExportOrLogCredentials() throws Exception {
-        assertEquals(SMTP_PASSWORD, ExtendedEmailPublisher.descriptor().getSmtpPassword().getPlainText());
+    void shouldNotExportOrLogCredentials(JenkinsConfiguredWithCodeRule j) throws Exception {
+        assertEquals(
+                SMTP_PASSWORD,
+                ExtendedEmailPublisher.descriptor().getSmtpPassword().getPlainText());
         assertLogContains(logging, "smtpPassword =");
         assertNotInLog(logging, SMTP_PASSWORD);
 
         // Verify that the password does not get exported
         String exportedConfig = j.exportToString(false);
-        assertThat("No entry was exported for SMTP credentials", exportedConfig, containsString("smtpPassword"));
-        assertThat("There should be no SMTP password in the exported YAML", exportedConfig, not(containsString(SMTP_PASSWORD)));
+        assertThat("SMTP credentials were migrated", exportedConfig, containsString("credentialsId"));
+        assertThat(
+                "There should be no SMTP password in the exported YAML",
+                exportedConfig,
+                not(containsString(SMTP_PASSWORD)));
     }
 
     @Test
     @Issue("SECURITY-1446")
-    public void shouldProperlyRoundTripTokenMacro() throws Exception {
-        final String defaultBody = "${PROJECT_NAME} - Build # ${BUILD_NUMBER} - ${BUILD_STATUS}:\n" +
-                "Check console output at $BUILD_URL to view the results.";
+    void shouldProperlyRoundTripTokenMacro(JenkinsConfiguredWithCodeRule j) throws Exception {
+        final String defaultBody = "${PROJECT_NAME} - Build # ${BUILD_NUMBER} - ${BUILD_STATUS}:\n"
+                + "Check console output at $BUILD_URL to view the results.";
         // This string contains extra escaping
         final String defaultSubject = "^^^${PROJECT_NAME} - Build # ^^${BUILD_NUMBER} - ^${BUILD_STATUS}!";
 

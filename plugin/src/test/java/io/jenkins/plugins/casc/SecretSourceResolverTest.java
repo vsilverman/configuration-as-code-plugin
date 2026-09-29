@@ -1,8 +1,16 @@
 package io.jenkins.plugins.casc;
 
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.startsWith;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
 import io.jenkins.plugins.casc.SecretSourceResolver.Base64Lookup;
 import io.jenkins.plugins.casc.SecretSourceResolver.FileBase64Lookup;
 import io.jenkins.plugins.casc.SecretSourceResolver.FileStringLookup;
+import io.jenkins.plugins.casc.SecretSourceResolver.SystemPropertyLookup;
 import java.io.File;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
@@ -24,12 +32,6 @@ import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.LoggerRule;
 import org.jvnet.hudson.test.WithoutJenkins;
 
-import static org.hamcrest.CoreMatchers.containsString;
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.CoreMatchers.startsWith;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertTrue;
-
 public class SecretSourceResolverTest {
 
     @ClassRule
@@ -42,14 +44,17 @@ public class SecretSourceResolverTest {
 
     @Rule
     public LoggerRule logging = new LoggerRule();
+
     public static final StringLookup ENCODE = Base64Lookup.INSTANCE;
     public static final StringLookup DECODE = StringLookupFactory.INSTANCE.base64DecoderStringLookup();
     public static final StringLookup FILE = FileStringLookup.INSTANCE;
     public static final StringLookup BINARYFILE = FileBase64Lookup.INSTANCE;
+    public static final StringLookup SYSPROP = SystemPropertyLookup.INSTANCE;
 
     @Before
     public void initLogging() {
-        logging.record(Logger.getLogger(SecretSourceResolver.class.getName()), Level.INFO).capture(2048);
+        logging.record(Logger.getLogger(SecretSourceResolver.class.getName()), Level.INFO)
+                .capture(2048);
     }
 
     @BeforeClass
@@ -203,6 +208,18 @@ public class SecretSourceResolverTest {
         assertThat(resolve("http://${FOO}:${BAR}"), equalTo("http://www.foo.io:8080"));
     }
 
+    /**
+     * Ensures that prefixes in the secret ID which are not covered by the CasC protocol substitutors (e.g. base64:, file:)
+     * are left untouched and not removed.
+     */
+    @Test
+    public void resolve_preservesPrefixesNotCoveredBySubstitutors() {
+        final String secret = "foobar";
+
+        environment.set("arn:aws:secretsmanager:eu-central-1:123456789012:secret:my-secret", secret);
+        assertThat(resolve("${arn:aws:secretsmanager:eu-central-1:123456789012:secret:my-secret}"), equalTo(secret));
+    }
+
     @Test
     public void resolve_mixedMultipleEntriesWithDefault() {
         environment.set("FOO", "www.foo.io");
@@ -309,15 +326,18 @@ public class SecretSourceResolverTest {
     @Test
     public void resolve_FileNotFound() {
         resolve("${readFile:./hello-world-not-found.txt}");
-        assertTrue(logContains("Configuration import: Error looking up file './hello-world-not-found.txt' with UTF-8 encoding."));
-        assertTrue(logContains("Configuration import: Found unresolved variable 'readFile:./hello-world-not-found.txt'."));
+        assertTrue(logContains(
+                "Configuration import: Error looking up file './hello-world-not-found.txt' with UTF-8 encoding."));
+        assertTrue(
+                logContains("Configuration import: Found unresolved variable 'readFile:./hello-world-not-found.txt'."));
     }
 
     @Test
     public void resolve_FileBase64NotFound() {
         resolve("${readFileBase64:./hello-world-not-found.txt}");
         assertTrue(logContains("Configuration import: Error looking up file './hello-world-not-found.txt'."));
-        assertTrue(logContains("Configuration import: Found unresolved variable 'readFileBase64:./hello-world-not-found.txt'."));
+        assertTrue(logContains(
+                "Configuration import: Found unresolved variable 'readFileBase64:./hello-world-not-found.txt'."));
     }
 
     @Test
@@ -337,6 +357,80 @@ public class SecretSourceResolverTest {
     }
 
     @Test
+    public void resolve_SystemProperty() throws Exception {
+        String input = "java.version";
+        String expected = System.getProperty(input);
+        String output = resolve("${sysProp:" + input + "}");
+        assertThat(output, equalTo(SYSPROP.lookup(input)));
+        assertThat(output, equalTo(expected));
+    }
+
+    @Test
+    public void resolve_SystemPropertyNotFound() throws Exception {
+        String input = "java.version.non-existent";
+        String expected = "";
+        String output = resolve("${sysProp:" + input + "}");
+        assertThat(output, equalTo(SYSPROP.lookup(input)));
+        assertThat(output, equalTo(expected));
+    }
+
+    @Test
+    public void resolve_Json() {
+        String input = "{ \"a\": 1, \"b\": 2 }";
+        environment.set("FOO", input);
+        String output = resolve("${json:a:${FOO}}");
+        assertThat(output, equalTo("1"));
+    }
+
+    /**
+     * Check that prettified / multi-line JSON is supported
+     */
+    @Test
+    public void resolve_JsonWithNewlineBetweenTokens() {
+        String input = "{ \n \"a\": 1, \n \"b\": 2 }";
+        environment.set("FOO", input);
+        String output = resolve("${json:a:${FOO}}");
+        assertThat(output, equalTo("1"));
+    }
+
+    @Test
+    public void resolve_JsonWithNewlineInValue() {
+        String input = "{ \"a\": \"hello\\nworld\", \"b\": 2 }";
+        environment.set("FOO", input);
+        String output = resolve("${json:a:${FOO}}");
+        assertThat(output, equalTo("hello\nworld"));
+    }
+
+    @Test
+    public void resolve_JsonWithSpaceInKey() {
+        String input = "{ \"abc def\": 1, \"b\": 2 }";
+        environment.set("FOO", input);
+        String output = resolve("${json:abc def:${FOO}}");
+        assertThat(output, equalTo("1"));
+    }
+
+    /**
+     * Test a mix of JSON and other lookups
+     */
+    @Test
+    public void resolve_JsonFromFile() throws Exception {
+        String input = getPath("secret.json").toAbsolutePath().toString();
+        String output = resolve("${json:Our secret:${file:" + input + "}}");
+        assertThat(output, equalTo("Hello World"));
+    }
+
+    @Test
+    public void resolve_JsonMissingKey() {
+        String input = "{ \"b\": 2 }";
+        environment.set("FOO", input);
+        String output = resolve("${json:a:${FOO}}");
+        assertTrue(
+                logContains(
+                        "Configuration import: JSON secret did not contain the specified key 'a'. Will default to empty string."));
+        assertThat(output, equalTo(""));
+    }
+
+    @Test
     @Issue("SECURITY-1446")
     @WithoutJenkins
     public void shouldEncodeInternalVarsProperly() {
@@ -349,5 +443,137 @@ public class SecretSourceResolverTest {
     private static void assertVarEncoding(String expected, String toEncode) {
         String encoded = context.getSecretSourceResolver().encode(toEncode);
         assertThat(encoded, equalTo(expected));
+    }
+
+    @Test
+    public void trimLookup_removesTrailingWhitespace() {
+        assertThat(SecretSourceResolver.TrimLookup.INSTANCE.lookup("value\n"), equalTo("value"));
+        assertThat(SecretSourceResolver.TrimLookup.INSTANCE.lookup("value\r\n"), equalTo("value"));
+        assertThat(SecretSourceResolver.TrimLookup.INSTANCE.lookup("  value  \n"), equalTo("  value"));
+    }
+
+    @Test
+    public void resolve_trimRemovesTrailingNewlines() {
+        environment.set("FOO", "my_secret_pass\n");
+        assertThat(resolve("${trim:${FOO}}"), equalTo("my_secret_pass"));
+
+        environment.set("BAR", "my_secret_pass\r\n");
+        assertThat(resolve("${trim:${BAR}}"), equalTo("my_secret_pass"));
+
+        environment.set("BAZ", "my_secret_pass\n\n\n");
+        assertThat(resolve("${trim:${BAZ}}"), equalTo("my_secret_pass"));
+    }
+
+    @Test
+    public void resolve_trimNoNewline_noChange() {
+        environment.set("FOO", "my_secret_pass");
+        assertThat(resolve("${trim:${FOO}}"), equalTo("my_secret_pass"));
+    }
+
+    @Test
+    public void resolve_trimRemovesTrailingSpacesButPreservesLeading() {
+        environment.set("FOO", "  my_secret_pass  \n");
+        assertThat(resolve("${trim:${FOO}}"), equalTo("  my_secret_pass"));
+
+        environment.set("BAR", "\tmy_secret_pass\t\r\n");
+        assertThat(resolve("${trim:${BAR}}"), equalTo("\tmy_secret_pass"));
+    }
+
+    @Test
+    public void resolve_trimNestedReadFile() throws Exception {
+        Path tempSecretFile = Files.createTempFile("casc-secret", ".txt");
+        tempSecretFile.toFile().deleteOnExit();
+
+        Files.writeString(tempSecretFile, "super_secret_ssh_key\n");
+        String inputPath = tempSecretFile.toAbsolutePath().toString();
+
+        String rawOutput = resolve("${readFile:" + inputPath + "}");
+        assertTrue("Raw output should contain the problematic trailing newline", rawOutput.endsWith("\n"));
+        assertThat(rawOutput, equalTo("super_secret_ssh_key\n"));
+
+        String trimmedOutput = resolve("${trim:${readFile:" + inputPath + "}}");
+        assertThat(trimmedOutput, equalTo("super_secret_ssh_key"));
+    }
+
+    @Test
+    public void resolve_readFilePreservesTrailingNewline() throws Exception {
+        Path tempFile = Files.createTempFile("casc-secret-baseline", ".txt");
+        tempFile.toFile().deleteOnExit();
+
+        Files.writeString(tempFile, "secret\n");
+
+        String output = resolve("${readFile:" + tempFile.toAbsolutePath() + "}");
+        assertThat(output, equalTo("secret\n"));
+    }
+
+    @Test
+    public void resolve_trimEmptyString() {
+        assertThat(resolve("${trim:}"), equalTo(""));
+    }
+
+    @Test
+    public void resolve_trimOnlyNewlines() {
+        environment.set("FOO", "\n\n");
+        assertThat(resolve("${trim:${FOO}}"), equalTo(""));
+    }
+
+    @Test
+    public void resolve_trimWithSpacesOnly_becomesEmpty() {
+        environment.set("FOO", "   ");
+        assertThat(resolve("${trim:${FOO}}"), equalTo(""));
+    }
+
+    @Test
+    public void resolve_strictModeEnvVar_throwsExceptionOnMissingVar() {
+        environment.set("CASC_STRICT_SECRET_RESOLUTION", "true");
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+            resolve("${MISSING_SECRET_VAR}");
+        });
+
+        assertThat(exception.getMessage(), containsString("MISSING_SECRET_VAR"));
+    }
+
+    @Test
+    public void resolve_strictModeSysProp_throwsExceptionOnMissingVar() {
+        System.setProperty("casc.strict.secret.resolution", "true");
+        try {
+            IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+                resolve("${ANOTHER_MISSING_VAR}");
+            });
+            assertThat(exception.getMessage(), containsString("ANOTHER_MISSING_VAR"));
+        } finally {
+            System.clearProperty("casc.strict.secret.resolution");
+        }
+    }
+
+    @Test
+    public void resolve_strictMode_ignoresExceptionIfDefaultProvided() {
+        environment.set("CASC_STRICT_SECRET_RESOLUTION", "true");
+
+        String output = resolve("${MISSING_SECRET_VAR:-my_fallback_value}");
+
+        assertThat(output, equalTo("my_fallback_value"));
+    }
+
+    @Test
+    public void resolve_strictModeSetToFalse_defaultsToEmptyString() {
+        environment.set("CASC_STRICT_SECRET_RESOLUTION", "false");
+
+        String output = resolve("${MISSING_SECRET_VAR}");
+
+        assertThat(output, equalTo(""));
+        assertTrue(logContains("Configuration import: Found unresolved variable 'MISSING_SECRET_VAR'"));
+    }
+
+    @Test
+    public void resolve_strictMode_multipleVariables_oneMissing_shouldFail() {
+        environment.set("CASC_STRICT_SECRET_RESOLUTION", "true");
+        environment.set("FOO", "hello");
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+            resolve("${FOO}:${MISSING}");
+        });
+        assertThat(exception.getMessage(), containsString("MISSING"));
     }
 }

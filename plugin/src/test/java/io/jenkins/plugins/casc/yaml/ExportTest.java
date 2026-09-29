@@ -1,5 +1,8 @@
 package io.jenkins.plugins.casc.yaml;
 
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.not;
+import static org.hamcrest.MatcherAssert.assertThat;
 
 import hudson.util.Secret;
 import io.jenkins.plugins.casc.ConfigurationAsCode;
@@ -9,28 +12,22 @@ import io.jenkins.plugins.casc.impl.configurators.DataBoundConfigurator;
 import io.jenkins.plugins.casc.model.CNode;
 import java.io.IOException;
 import java.io.StringWriter;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.yaml.snakeyaml.error.YAMLException;
 import org.yaml.snakeyaml.nodes.Node;
 
-import static org.hamcrest.CoreMatchers.containsString;
-import static org.hamcrest.CoreMatchers.not;
-import static org.hamcrest.MatcherAssert.assertThat;
-
 /**
  * Contains tests for particular export cases.
  */
-public class ExportTest {
-
-    @Rule
-    public JenkinsRule j = new JenkinsRule();
+@WithJenkins
+class ExportTest {
 
     @Test
-    public void shouldNotExportValuesWithSecretGetters() throws Exception {
+    void shouldNotExportValuesWithSecretGetters(JenkinsRule j) throws Exception {
         DataBoundConfigurator<DataBoundSecret> c = new DataBoundConfigurator<>(DataBoundSecret.class);
         String res = export(c, new DataBoundSecret("test"));
         assertThat(res, not(containsString("test")));
@@ -38,7 +35,7 @@ public class ExportTest {
 
     @Test
     @Issue("SECURITY-1458")
-    public void shouldNotExportValuesWithSecretFields() throws Exception {
+    void shouldNotExportValuesWithSecretFields(JenkinsRule j) throws Exception {
         DataBoundConfigurator<DataBoundSecretField> c = new DataBoundConfigurator<>(DataBoundSecretField.class);
         String res = export(c, new DataBoundSecretField("test"));
         assertThat(res, not(containsString("test")));
@@ -46,8 +43,9 @@ public class ExportTest {
 
     @Test
     @Issue("SECURITY-1458")
-    public void shouldNotExportValuesWithSecretConstructors() throws Exception {
-        DataBoundConfigurator<DataBoundSecretConstructor> c = new DataBoundConfigurator<>(DataBoundSecretConstructor.class);
+    void shouldNotExportValuesWithSecretConstructors(JenkinsRule j) throws Exception {
+        DataBoundConfigurator<DataBoundSecretConstructor> c =
+                new DataBoundConfigurator<>(DataBoundSecretConstructor.class);
         String res = export(c, new DataBoundSecretConstructor(Secret.fromString("test")));
         assertThat(res, not(containsString("test")));
     }
@@ -112,5 +110,4 @@ public class ExportTest {
             return mySecretValueField.getPlainText();
         }
     }
-
 }

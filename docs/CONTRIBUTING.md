@@ -4,7 +4,8 @@
 
 ## Reporting plugin compatibility issues
 
-See [COMPATIBILITY](./COMPATIBILITY.md)
+See [compatibility](developer/compatibility.md)
+
 
 ## Why should you contribute
 
@@ -45,70 +46,34 @@ just ask in [our Gitter Channel](https://gitter.im/jenkinsci/configuration-as-co
 
 ### Project meetings
 
-Join our Jenkins Configuration as Code office hours meeting scheduled for every second Wednesday. 
-At these meetings we discuss recent releases and incoming changes, everybody is welcome to present their JCasC-related work and case studies.
-See the [Jenkins Event Calendar](https://jenkins.io/event-calendar/) for exact times, we also repost links in our [Gitter chat](https://gitter.im/jenkinsci/configuration-as-code-plugin). 
-
-Archive: [meeting minutes](https://docs.google.com/document/d/1Hm07Q1egWL6VVAqNgu27bcMnqNZhYJmXKRvknVw4Y84/edit?usp=sharing) and [meeting recordings](https://www.google.com/url?q=https://www.youtube.com/playlist?list%3DPLN7ajX_VdyaNgevVZbfczE4IeGifW-t87&sa=D&usd=2&usg=AOvVaw0QPw6eDS-jw_DgHgOaft3Z).
+[Meeting minutes](https://docs.google.com/document/d/1Hm07Q1egWL6VVAqNgu27bcMnqNZhYJmXKRvknVw4Y84/edit?usp=sharing) and [meeting recordings](https://www.google.com/url?q=https://www.youtube.com/playlist?list%3DPLN7ajX_VdyaNgevVZbfczE4IeGifW-t87&sa=D&usd=2&usg=AOvVaw0QPw6eDS-jw_DgHgOaft3Z) of Jenkins Configuration as Code office hours are available for reference.
+See our [Gitter chat](https://gitter.im/jenkinsci/configuration-as-code-plugin) for online chat.
 
 ## Run Locally
 
 Prerequisites: _Java_, _Maven_ & _IntelliJ IDEA_
 
-- Ensure Java 8 is available. There are unresolved issues with Java 10/11 as of October 24, 2018.
+- Ensure Java 11 or 17 is available.
 
   ```shell
-  /usr/libexec/java_home
-  ```
-
-  ```text
-  /Library/Java/JavaVirtualMachines/jdk-11.0.1.jdk/Contents/Home
-  ```
-
-  - If Java 11 is selected by default, check other available Java version below.
-
-  ```shell
-  /usr/libexec/java_home --verbose
-  ```
-
-  ```text
-  Matching Java Virtual Machines (3):
-      11.0.1, x86_64: "Java SE 11.0.1"  /Library/Java/JavaVirtualMachines/jdk-11.0.1.jdk/Contents/Home
-      10.0.2, x86_64: "Java SE 10.0.2"  /Library/Java/JavaVirtualMachines/jdk-10.0.2.jdk/Contents/Home
-      1.8.0_192, x86_64:  "Java SE 8"  /Library/Java/JavaVirtualMachines/jdk1.8.0_192.jdk/Contents/Home
-
-  /Library/Java/JavaVirtualMachines/jdk-11.0.1.jdk/Contents/Home
-  ```
-
-  - Use the alternate Java 8.
-
-  ```shell
-  export JAVA_HOME=`/usr/libexec/java_home -v 1.8`
-  echo $JAVA_HOME
-  ```
-
-  ```text
-  /Library/Java/JavaVirtualMachines/jdk1.8.0_192.jdk/Contents/Home
+  java --version
   ```
 
 - Ensure Maven is included in the PATH environment variable.
 
   ```shell
-  export PATH=$PATH:/path/to/apache-maven-x.y.z/bin
+  export PATH=$PATH:/path/to/apache-maven-3.8.6/bin
   ```
   
   ### IntelliJ IDEA
 
 - Open the root directory of this project in IntelliJ IDEA.
 - If you are opening the first time, wait patiently while project dependencies are being downloaded.
-- Click `Run` in the menu. Select `Edit Configurations` in the menu item.
-- Click `Add New Configuration` (`+`) in the top left of the shown dialog. Select `Maven`.
-- Under `Parameters` tab group, `Working directory:` is `/path/to/configuration-as-code-plugin/plugin`.
-- Under `Parameters` tab group, `Command line:` is `hpi:run`.
 - Verify that IntelliJ IDEA is not using bundled maven.
   - Click `File` -> `Preferences...` -> `Build, Execution, Deployment` -> `Build Tools` -> `Maven`.
   - `Maven home directory:` has `/path/to/apache-maven-x.y.z` value, not `Bundled (Maven 3)`.
-- Open <http://localhost:8080/jenkins/configuration-as-code/> to test the plugin locally.
+- Use the `start jenkins` run configuration stored in the `.run` folder of this project, (if you wish to change it then duplicate it and maintain your own local copy)
+- Open <http://localhost:8085/jenkins/configuration-as-code/> to test the plugin locally.
 
 ### CLI
 
@@ -117,7 +82,7 @@ Prerequisites: _Java_, _Maven_ & _IntelliJ IDEA_
 
 ```shell
 export JAVA_HOME=`/usr/libexec/java_home -v 1.8`
-export PATH=$PATH:/path/to/apache-maven-x.y.z/bin
+export PATH=$PATH:/path/to/apache-maven-3.8.6/bin
 mvn hpi:run
 ```
 

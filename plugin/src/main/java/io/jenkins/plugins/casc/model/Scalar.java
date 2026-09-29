@@ -6,19 +6,25 @@ import java.util.stream.IntStream;
 /**
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
-
 public final class Scalar implements CNode, CharSequence {
 
     private static final String SECRET_VALUE_STRING = "****";
 
-    private String value;
-    private Format format;
+    private final String value;
+    private final Format format;
     private boolean raw;
     private Source source;
     private boolean sensitive;
     private boolean encrypted;
+    private boolean printableWhenEmpty = false;
 
-    public enum Format { STRING, MULTILINESTRING, BOOLEAN, NUMBER, FLOATING }
+    public enum Format {
+        STRING,
+        MULTILINESTRING,
+        BOOLEAN,
+        NUMBER,
+        FLOATING
+    }
 
     public Scalar(String value, Source source) {
         this(value);
@@ -159,8 +165,21 @@ public final class Scalar implements CNode, CharSequence {
     }
 
     @Override
-    public CNode clone() {
-        return new Scalar(this);
+    public boolean isPrintableWhenEmpty() {
+        return printableWhenEmpty;
+    }
+
+    public void setPrintableWhenEmpty(boolean print) {
+        this.printableWhenEmpty = print;
+    }
+
+    @Override
+    public Scalar clone() {
+        try {
+            return (Scalar) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private Scalar(Scalar it) {
@@ -170,5 +189,6 @@ public final class Scalar implements CNode, CharSequence {
         this.source = it.source;
         this.sensitive = it.sensitive;
         this.encrypted = it.encrypted;
+        this.printableWhenEmpty = it.printableWhenEmpty;
     }
 }

@@ -6,7 +6,7 @@ Basic configuration of the [Amazon EC2 Plugin](https://plugins.jenkins.io/ec2)
 
 ```yaml
 x-ec2_anchor: &ec2_anchor
-  associatePublicIp: false
+  associateIPStrategy: PRIVATE_IP
   connectBySSHProcess: false
   connectionStrategy: PRIVATE_IP
   deleteRootOnTermination: false
@@ -33,7 +33,7 @@ x-ec2_anchor: &ec2_anchor
 jenkins:
   clouds:
     - amazonEC2:
-        cloudName: "ec2"
+        name: "ec2"
         instanceCapStr: 20
         # this shouldn't be needed, since without explicit creds this should already be used
         # but let's be explicit to avoid issues.
@@ -44,11 +44,11 @@ jenkins:
         region: "eu-central-1"
         templates:
           - description: "Auto configured EC2 Agent Small"
-            type: "T2Small"
+            type: "t2.small"
             labelString: "Small"
             <<: *ec2_anchor
           - description: "Auto configured EC2 Agent Large"
-            type: "T2Xlarge"
+            type: "t2.xlarge"
             labelString: "Large"
             <<: *ec2_anchor
 ```

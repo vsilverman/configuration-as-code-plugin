@@ -1,5 +1,10 @@
 package io.jenkins.plugins.casc.impl.configurators;
 
+import static io.jenkins.plugins.casc.Attribute.Setter.NOP;
+import static io.jenkins.plugins.casc.ConfigurationAsCode.printThrowable;
+import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
+
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.model.Descriptor;
@@ -11,27 +16,24 @@ import io.jenkins.plugins.casc.RootElementConfigurator;
 import io.jenkins.plugins.casc.model.CNode;
 import io.jenkins.plugins.casc.model.Mapping;
 import io.jenkins.plugins.casc.model.Scalar;
+import io.jenkins.plugins.casc.model.Sequence;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import jenkins.model.GlobalConfigurationCategory;
 import jenkins.model.Jenkins;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.jenkinsci.Symbol;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
-
-import static io.jenkins.plugins.casc.Attribute.Setter.NOP;
-import static io.jenkins.plugins.casc.ConfigurationAsCode.printThrowable;
-import static java.util.Arrays.asList;
-import static java.util.Collections.singletonList;
 
 /**
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
 @Restricted(NoExternalUse.class)
-public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<GlobalConfigurationCategory> implements RootElementConfigurator<GlobalConfigurationCategory> {
+public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<GlobalConfigurationCategory>
+        implements RootElementConfigurator<GlobalConfigurationCategory> {
 
     private static final Logger LOGGER = Logger.getLogger(GlobalConfigurationCategoryConfigurator.class.getName());
 
@@ -52,7 +54,9 @@ public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<Gl
     public List<String> getNames() {
         final Class c = category.getClass();
         final Symbol symbol = (Symbol) c.getAnnotation(Symbol.class);
-        if (symbol != null) return asList(symbol.value());
+        if (symbol != null) {
+            return asList(symbol.value());
+        }
 
         String name = c.getSimpleName();
         name = StringUtils.remove(name, "Global");
@@ -76,23 +80,29 @@ public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<Gl
         return category;
     }
 
-    @SuppressWarnings("RedundantCast") // TODO remove once we are on JDK 11
     @NonNull
     @Override
-    public Set describe() {
-        return (Set) Jenkins.get().getExtensionList(Descriptor.class).stream()
+    public Set<Attribute<GlobalConfigurationCategory, ?>> describe() {
+        return Jenkins.get().getExtensionList(Descriptor.class).stream()
                 .filter(d -> d.getCategory() == category)
                 .filter(d -> d.getGlobalConfigPage() != null)
                 .map(DescriptorConfigurator::new)
                 .filter(GlobalConfigurationCategoryConfigurator::reportDescriptorWithoutSetters)
-                .map(c -> new Attribute<GlobalConfigurationCategory, Object>(c.getNames(), c.getTarget()).setter(NOP))
+                .map(c -> new Attribute<GlobalConfigurationCategory, Object>(c.getNames(), c.getTarget())
+                        .setter(typedNop()))
                 .collect(Collectors.toSet());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T, V> Attribute.Setter<T, V> typedNop() {
+        return (Attribute.Setter<T, V>) NOP;
     }
 
     public static boolean reportDescriptorWithoutSetters(Configurator c) {
         if (c.describe().isEmpty()) {
-            LOGGER.fine(c.getTarget().getName() +
-                    " has a global view but CasC didn't detect any configurable attribute; see: https://jenkins.io/redirect/casc-requirements/");
+            LOGGER.fine(
+                    c.getTarget().getName()
+                            + " has a global view but CasC didn't detect any configurable attribute; see: https://jenkins.io/redirect/casc-requirements/");
         }
         return true;
     }
@@ -103,8 +113,13 @@ public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<Gl
 
         final Mapping mapping = new Mapping();
         Jenkins.get().getExtensionList(Descriptor.class).stream()
-            .filter(this::filterDescriptors)
-            .forEach(d -> describe(d, mapping, context));
+                .filter(this::filterDescriptors)
+                .forEach(d -> describe(d, mapping, context));
+        mapping.entrySet()
+                .removeIf(e -> e.getValue() instanceof Mapping m
+                        && m.keySet().equals(Set.of("installations"))
+                        && m.get("installations") instanceof Sequence s
+                        && s.isEmpty());
         return mapping;
     }
 
@@ -112,10 +127,11 @@ public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<Gl
         final DescriptorConfigurator c = new DescriptorConfigurator(d);
         try {
             final CNode node = c.describe(d, context);
-            if (node != null) mapping.put(c.getName(), node);
+            if (node != null) {
+                mapping.put(c.getName(), node);
+            }
         } catch (Exception e) {
-            final Scalar scalar = new Scalar(
-                "FAILED TO EXPORT\n" + d.getClass().getName() + " : " + printThrowable(e));
+            final Scalar scalar = new Scalar("FAILED TO EXPORT\n" + d.getClass().getName() + " : " + printThrowable(e));
             mapping.put(c.getName(), scalar);
         }
     }
@@ -123,5 +139,4 @@ public class GlobalConfigurationCategoryConfigurator extends BaseConfigurator<Gl
     private boolean filterDescriptors(Descriptor d) {
         return d.getCategory() == category && d.getGlobalConfigPage() != null;
     }
-
 }

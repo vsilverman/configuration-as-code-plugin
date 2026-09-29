@@ -1,20 +1,20 @@
 package io.jenkins.plugins.casc.model;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
+import java.io.Serial;
 import java.io.Serializable;
 
 /**
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
+public record Source(String file, int line) implements Serializable {
 
-public class Source implements Serializable {
+    @Serial
+    private static final long serialVersionUID = 1L;
 
-    static final long serialVersionUID = 1L;
-
-    public final String file;
-    public final int line;
-
-    public Source(String file, int line) {
-        this.file = file;
-        this.line = line;
+    @NonNull
+    @Override
+    public String toString() {
+        return (file != null ? file + ":" : "line ") + line;
     }
 }

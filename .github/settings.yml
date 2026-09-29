@@ -10,7 +10,6 @@ repository:
   allow_squash_merge: true
   allow_rebase_merge: true
 
-#TODO(oleg-nenashev): Consider moving to https://github.com/jenkinsci/.github once https://github.com/probot/settings/issues/107 is fixed
 labels:
   - name: good first issue
     color: 7057ff
@@ -71,3 +70,6 @@ labels:
   - name: dependencies
     color: 0366d6
     description: A PR that updates dependencies - used by Release Drafter
+  - name: developer
+    color: 80D14D
+    description: A PR that merits a release for plugin developers

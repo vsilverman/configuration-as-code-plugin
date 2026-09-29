@@ -1,21 +1,20 @@
 # Jenkins Configuration as Code (a.k.a. JCasC) Plugin
 
-[![Build Status](https://ci.jenkins.io/job/Plugins/job/configuration-as-code-plugin/job/master/badge/icon)](https://ci.jenkins.io/job/Plugins/job/configuration-as-code-plugin/job/master/)
-[![Travis](https://img.shields.io/travis/jenkinsci/configuration-as-code-plugin.svg?logo=travis&label=build&logoColor=white)](https://travis-ci.org/jenkinsci/configuration-as-code-plugin)
+[![Build Status](https://ci.jenkins.io/buildStatus/icon?job=Plugins%2Fconfiguration-as-code-plugin%2Fmaster)](https://ci.jenkins.io/job/Plugins/job/configuration-as-code-plugin/job/master/)
 [![Contributors](https://img.shields.io/github/contributors/jenkinsci/configuration-as-code-plugin.svg)](https://github.com/jenkinsci/configuration-as-code-plugin/graphs/contributors)
-[![Codacy Badge](https://api.codacy.com/project/badge/Grade/1c872818b46f4fdd890e4a22af0bee8c)](https://www.codacy.com/app/casz/configuration-as-code-plugin)
 [![Jenkins Plugin](https://img.shields.io/jenkins/plugin/v/configuration-as-code.svg)](https://plugins.jenkins.io/configuration-as-code)
 [![GitHub release](https://img.shields.io/github/release/jenkinsci/configuration-as-code-plugin.svg?label=changelog)](https://github.com/jenkinsci/configuration-as-code-plugin/releases/latest)
 [![Jenkins Plugin Installs](https://img.shields.io/jenkins/plugin/i/configuration-as-code.svg?color=blue)](https://plugins.jenkins.io/configuration-as-code)
 [![Gitter](https://badges.gitter.im/jenkinsci/configuration-as-code-plugin.svg)](https://gitter.im/jenkinsci/configuration-as-code-plugin)
 
-<img src="plugin/src/main/webapp/img/logo-head.svg" width="192">
+<img src="images/logo-head.svg" width="192">
 
 
 - [Introduction](#introduction)
 - [Getting Started](#getting-started)
 - [Examples and demos](./demos)
 - [Handling Secrets](./docs/features/secrets.adoc)
+- [Security considerations](#security-considerations)
 - [Exporting configurations](./docs/features/configExport.md)
 - [Validating configurations](./docs/features/jsonSchema.md)
 - [Merge Strategy](./docs/features/mergeStrategy.md)
@@ -66,7 +65,7 @@ jenkins:
         name: "static-agent"
         remoteFS: "/home/jenkins"
         launcher:
-          jnlp:
+          inbound:
             workDirSettings:
               disabled: true
               failIfWorkDirIsMissing: false
@@ -74,8 +73,6 @@ jenkins:
               workDirPath: "/tmp"
 
   slaveAgentPort: 50000
-  agentProtocols:
-    - "jnlp2"
 
 tool:
   git:
@@ -98,6 +95,8 @@ credentials:
                   privateKey: ${SSH_PRIVATE_KEY}
 ```
 
+> **Note:** JCasC treats `${VAR}` as a variable interpolation expression across all configuration blocks. If you need a literal `${...}` string, you must escape it as `^${VAR}` to prevent JCasC from replacing it. For more details, see [Handling Secrets](./docs/features/secrets.adoc).
+
 Additionally, we want to have a well-documented syntax file and tooling to assist in writing and testing,
 so end users have full guidance in using this toolset and do not have to search for examples on the Internet.
 
@@ -111,25 +110,11 @@ First, start a Jenkins instance with the [Configuration as Code](https://plugins
 
 Second, the plugin looks for the `CASC_JENKINS_CONFIG` environment variable. The variable points to a comma-separated list of any of the following:
 
-- Path to a folder containing a set of config files. For example, `/var/jenkins_home/casc_configs`.
-- A full path to a single file. For example, `/var/jenkins_home/casc_configs/jenkins.yaml`.
-- A URL pointing to a file served on the web. For example, `https://acme.org/jenkins.yaml`.
+- Path to a local folder containing a set of config files. For example, `/var/jenkins_home/casc_configs`.
+- A full path or URI to a local file. For example, `/var/jenkins_home/casc_configs/jenkins.yaml` or `file:///var/jenkins_home/casc_configs/jenkins.yaml`.
+- An HTTP or HTTPS URL pointing to a remote file. For example, `https://acme.org/jenkins.yaml`.
 
-If an element of `CASC_JENKINS_CONFIG` points to a folder, the plugin will recursively traverse the folder to find file(s) with .yml,.yaml,.YAML,.YML suffix. It will exclude hidden files or files that contain a hidden folder in **any part** of the full path. It follows symbolic links for both files and directories.
-<details><summary>Exclusion examples</summary>
-
-`CASC_JENKINS_CONFIG=/jenkins/casc_configs`  
-:heavy_check_mark: `/jenkins/casc_configs/jenkins.yaml`  
-:heavy_check_mark: `/jenkins/casc_configs/dir1/config.yaml`  
-:x: `/jenkins/casc_configs/.dir1/config.yaml`  
-:x: `/jenkins/casc_configs/..dir2/config.yaml`  
-  
-`CASC_JENKINS_CONFIG=/jenkins/.configs/casc_configs` contains hidden folder `.config`  
-:x: `/jenkins/.configs/casc_configs/jenkins.yaml`  
-:x: `/jenkins/.configs/casc_configs/dir1/config.yaml`  
-:x: `/jenkins/.configs/casc_configs/.dir1/config.yaml`  
-:x: `/jenkins/.configs/casc_configs/..dir2/config.yaml`  
-</details>
+If an element of `CASC_JENKINS_CONFIG` points to a folder, the plugin will recursively traverse the folder to find file(s) with `.yml`, `.yaml`, `.YAML`, `.YML` suffix.
 
 All configuration files that are discovered MUST be supplementary. They cannot overwrite each other's configuration values. This creates a conflict and raises a `ConfiguratorException`. Thus, the order of traversal does not matter to the final outcome.
 
@@ -151,7 +136,7 @@ If set up correctly, you should be able to browse the Configuration as Code page
 
 When configuring the first Jenkins instance, browse the examples shown in the [demos](demos)
 directory of this repository. If you have a plugin that does not have an example, consult the reference
-help document. Click the `Documentation` link at the bottom of the Configuration as Code page.
+help document. Click the `Documentation` link at the bottom of the Configuration as Code page in your Jenkins instance.
 
 ![Reference Page](images/reference.png)
 
@@ -193,7 +178,7 @@ Anchor keys must be prefixed with `x-` due to JCasC handling unknown root elemen
 x-jenkins-linux-node: &jenkins_linux_node_anchor
   remoteFS: "/home/jenkins"
   launcher:
-    jnlp:
+    inbound:
       workDirSettings:
         disabled: true
         failIfWorkDirIsMissing: false
@@ -219,7 +204,7 @@ jenkins:
         name: "static-agent1"
         remoteFS: "/home/jenkins"
         launcher:
-          jnlp:
+          inbound:
             workDirSettings:
               disabled: true
               failIfWorkDirIsMissing: false
@@ -229,7 +214,7 @@ jenkins:
         name: "static-agent2"
         remoteFS: "/home/jenkins"
         launcher:
-          jnlp:
+          inbound:
             workDirSettings:
               disabled: true
               failIfWorkDirIsMissing: false
@@ -237,6 +222,15 @@ jenkins:
               workDirPath: "/tmp"
 ```
 
+## Security considerations
+Only Jenkins administrators are able to create or update a Jenkins instance using configuration as code configuration files.
+However, in some environments, administrators may choose to allow less privileged users to modify portions of the configuration files, for example by storing them in an SCM repository that those users have access to.
+Allowing non-administrators to edit these configuration files can pose various security risks, so any changes made by non-administrators must be reviewed for safety before they are applied.
+
+Here are some examples of changes that could be problematic:
+
+- Modification of the security realm or authorization strategy settings could give users higher permissions than intended.
+- Interpolation of secrets in unprotected contexts may expose sensitive data. For example, a snippet like `systemMessage: "${SENSITIVE_VARIABLE}"` could expose the value of a sensitive environment variable to all users who are able to access Jenkins.
 
 ## Installing plugins
 
@@ -254,12 +248,16 @@ Most plugins should be supported out-of-the-box or maybe require some minimal ch
 
 ## Adding JCasC support to a plugin
 
-Plugin developers wanting to support JCasC in their plugin should [check out our how-to guide](docs/PLUGINS.md).
+Plugin developers wanting to support JCasC in their plugin should [check out our how-to guide](docs/developer/plugins.md).
 
 ## Configuration-as-Code extension plugins
 
 - [configuration-as-code-groovy-plugin](https://github.com/jenkinsci/configuration-as-code-groovy-plugin)\
   Allows specifying groovy code that should run on during configuration.
+
+## Developer Documentation
+
+See the [Developer Guide](docs/developer/README.md).
 
 ## Jenkins Enhancement Proposal
 

@@ -1,18 +1,5 @@
 package io.jenkins.plugins.casc;
 
-import com.amazonaws.services.ec2.model.InstanceType;
-import hudson.model.labels.LabelAtom;
-import hudson.plugins.ec2.AMITypeData;
-import hudson.plugins.ec2.AmazonEC2Cloud;
-import hudson.plugins.ec2.SlaveTemplate;
-import hudson.plugins.ec2.UnixData;
-import io.jenkins.plugins.casc.misc.ConfiguredWithReadme;
-import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithReadmeRule;
-import java.util.List;
-import jenkins.model.Jenkins;
-import org.junit.Rule;
-import org.junit.Test;
-
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
@@ -23,6 +10,20 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import hudson.model.labels.LabelAtom;
+import hudson.plugins.ec2.AMITypeData;
+import hudson.plugins.ec2.AssociateIPStrategy;
+import hudson.plugins.ec2.EC2Cloud;
+import hudson.plugins.ec2.SlaveTemplate;
+import hudson.plugins.ec2.UnixData;
+import io.jenkins.plugins.casc.misc.ConfiguredWithReadme;
+import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithReadmeRule;
+import java.util.List;
+import jenkins.model.Jenkins;
+import org.junit.Rule;
+import org.junit.Test;
+import software.amazon.awssdk.services.ec2.model.InstanceType;
+
 public class EC2CloudTest {
 
     @Rule
@@ -31,7 +32,7 @@ public class EC2CloudTest {
     @Test
     @ConfiguredWithReadme("ec2/README.md")
     public void configure_ec2_cloud() {
-        final AmazonEC2Cloud ec2Cloud = (AmazonEC2Cloud) Jenkins.get().getCloud("ec2-ec2");
+        final EC2Cloud ec2Cloud = (EC2Cloud) Jenkins.get().getCloud("ec2");
         assertNotNull(ec2Cloud);
 
         assertTrue(ec2Cloud.isUseInstanceProfileForCredentials());
@@ -41,14 +42,14 @@ public class EC2CloudTest {
 
         SlaveTemplate slaveTemplate = templates.get(0);
         assertThat(slaveTemplate.getDisplayName(), containsString("Auto configured EC2 Agent Small"));
-        assertFalse(slaveTemplate.getAssociatePublicIp());
         assertFalse(slaveTemplate.isConnectBySSHProcess());
         assertFalse(slaveTemplate.deleteRootOnTermination);
         assertFalse(slaveTemplate.ebsOptimized);
         assertFalse(slaveTemplate.monitoring);
         assertFalse(slaveTemplate.stopOnTerminate);
         assertFalse(slaveTemplate.useEphemeralDevices);
-        assertThat(slaveTemplate.type, is(InstanceType.T2Small));
+        assertThat(slaveTemplate.getAssociateIPStrategy(), equalTo(AssociateIPStrategy.PRIVATE_IP));
+        assertThat(slaveTemplate.type, is(InstanceType.T2_SMALL.toString()));
         assertThat(slaveTemplate.getAmi(), equalTo("ami-0c6bb742864ffa3f3"));
         assertThat(slaveTemplate.getLabelString(), containsString("Small"));
         assertThat(slaveTemplate.getLabelSet(), is(notNullValue()));
@@ -69,17 +70,16 @@ public class EC2CloudTest {
         assertThat(unixData.getSlaveCommandPrefix(), equalTo("sudo -u jenkins"));
         assertThat(unixData.getSshPort(), equalTo("61120"));
 
-
         slaveTemplate = templates.get(1);
         assertThat(slaveTemplate.getDisplayName(), containsString("Auto configured EC2 Agent Large"));
-        assertFalse(slaveTemplate.getAssociatePublicIp());
+        assertThat(slaveTemplate.getAssociateIPStrategy(), equalTo(AssociateIPStrategy.PRIVATE_IP));
         assertFalse(slaveTemplate.isConnectBySSHProcess());
         assertFalse(slaveTemplate.deleteRootOnTermination);
         assertFalse(slaveTemplate.ebsOptimized);
         assertFalse(slaveTemplate.monitoring);
         assertFalse(slaveTemplate.stopOnTerminate);
         assertFalse(slaveTemplate.useEphemeralDevices);
-        assertThat(slaveTemplate.type, is(InstanceType.T2Xlarge));
+        assertThat(slaveTemplate.type, is(InstanceType.T2_XLARGE.toString()));
         assertThat(slaveTemplate.getAmi(), equalTo("ami-0c6bb742864ffa3f3"));
         assertThat(slaveTemplate.getLabelString(), containsString("Large"));
         assertThat(slaveTemplate.getLabelSet(), is(notNullValue()));

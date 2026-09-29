@@ -17,10 +17,6 @@ import jenkins.model.Jenkins;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 
-
-/**
- * TODO would  not be required if UpdateCenter had a DataBoundConstructor
- */
 @Extension
 @Restricted(NoExternalUse.class)
 public class UpdateCenterConfigurator extends BaseConfigurator<UpdateCenter> {
@@ -31,8 +27,8 @@ public class UpdateCenterConfigurator extends BaseConfigurator<UpdateCenter> {
     }
 
     @Override
-    protected void configure(Mapping config, UpdateCenter instance, boolean dryrun,
-        ConfigurationContext context) throws ConfiguratorException {
+    protected void configure(Mapping config, UpdateCenter instance, boolean dryrun, ConfigurationContext context)
+            throws ConfiguratorException {
         super.configure(config, instance, dryrun, context);
     }
 
@@ -44,10 +40,9 @@ public class UpdateCenterConfigurator extends BaseConfigurator<UpdateCenter> {
     @Override
     @NonNull
     public Set<Attribute<UpdateCenter, ?>> describe() {
-        return new HashSet<>(Collections.singletonList(
-            new MultivaluedAttribute<UpdateCenter, UpdateSite>("sites", UpdateSite.class)
-                .getter(UpdateCenter::getSiteList)
-                .setter((target, value) -> target.getSites().replaceBy(value))
-        ));
+        return new HashSet<>(
+                Collections.singletonList(new MultivaluedAttribute<UpdateCenter, UpdateSite>("sites", UpdateSite.class)
+                        .getter(UpdateCenter::getSiteList)
+                        .setter((target, value) -> target.getSites().replaceBy(value))));
     }
 }

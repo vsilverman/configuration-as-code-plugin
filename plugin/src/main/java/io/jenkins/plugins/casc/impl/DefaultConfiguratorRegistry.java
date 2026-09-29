@@ -42,7 +42,6 @@ public class DefaultConfiguratorRegistry implements ConfiguratorRegistry {
 
     private static final Logger LOGGER = Logger.getLogger(DefaultConfiguratorRegistry.class.getName());
 
-
     @Override
     @CheckForNull
     public RootElementConfigurator lookupRootElement(String name) {
@@ -81,9 +80,8 @@ public class DefaultConfiguratorRegistry implements ConfiguratorRegistry {
         return cache.get(type);
     }
 
-    private LoadingCache<Type, Configurator> cache = Caffeine.newBuilder()
-            .expireAfterAccess(10L, TimeUnit.SECONDS)
-            .build(type -> internalLookup(type));
+    private LoadingCache<Type, Configurator> cache =
+            Caffeine.newBuilder().expireAfterAccess(10L, TimeUnit.SECONDS).build(type -> internalLookup(type));
 
     private Configurator internalLookup(Type type) {
         Class clazz = Types.erasure(type);
@@ -97,20 +95,15 @@ public class DefaultConfiguratorRegistry implements ConfiguratorRegistry {
             }
         }
 
-        //TODO: Only try to cast if we can actually get the parameterized type
-        if (Collection.class.isAssignableFrom(clazz) && type instanceof ParameterizedType) {
-            ParameterizedType pt = (ParameterizedType) type;
-            Type actualType = pt.getActualTypeArguments()[0];
-            if (actualType instanceof WildcardType) {
-                actualType = ((WildcardType) actualType).getUpperBounds()[0];
+        if (Collection.class.isAssignableFrom(clazz)) {
+            Type collectionType = Types.getBaseClass(type, Collection.class);
+            if (collectionType instanceof ParameterizedType pt) {
+                Type actualType = pt.getActualTypeArguments()[0];
+                if (actualType instanceof WildcardType wildcardType) {
+                    actualType = wildcardType.getUpperBounds()[0];
+                }
+                return internalLookup(actualType); // cache is not reëntrant
             }
-            if (actualType instanceof ParameterizedType) {
-                actualType = ((ParameterizedType) actualType).getRawType();
-            }
-            if (!(actualType instanceof Class)) {
-                throw new IllegalStateException("Can't handle " + type);
-            }
-            return internalLookup(actualType); // cache is not reëntrant
         }
 
         if (Configurable.class.isAssignableFrom(clazz)) {
@@ -145,9 +138,7 @@ public class DefaultConfiguratorRegistry implements ConfiguratorRegistry {
             return new EnumConfigurator(clazz);
         }
 
-        LOGGER.warning("Configuration-as-Code can't handle type "+ type);
+        LOGGER.warning("Configuration-as-Code can't handle type " + type);
         return null;
     }
-
-
 }

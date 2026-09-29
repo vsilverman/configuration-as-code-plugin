@@ -1,7 +1,12 @@
 package io.jenkins.plugins.casc;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import io.jenkins.plugins.casc.misc.ConfiguredWithCode;
 import io.jenkins.plugins.casc.misc.JenkinsConfiguredWithCodeRule;
+import io.jenkins.plugins.casc.misc.junit.jupiter.WithJenkinsConfiguredWithCode;
 import org.jenkinsci.plugins.github_branch_source.BranchDiscoveryTrait;
 import org.jenkinsci.plugins.github_branch_source.ForkPullRequestDiscoveryTrait;
 import org.jenkinsci.plugins.github_branch_source.ForkPullRequestDiscoveryTrait.TrustPermission;
@@ -10,29 +15,22 @@ import org.jenkinsci.plugins.github_branch_source.OriginPullRequestDiscoveryTrai
 import org.jenkinsci.plugins.workflow.libs.GlobalLibraries;
 import org.jenkinsci.plugins.workflow.libs.LibraryConfiguration;
 import org.jenkinsci.plugins.workflow.libs.SCMSourceRetriever;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.Issue;
-
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
-
 
 /**
  * @author <a href="mailto:nicolas.deloof@gmail.com">Nicolas De Loof</a>
  */
-public class GlobalLibrariesTest {
-
-    @Rule
-    public JenkinsConfiguredWithCodeRule j = new JenkinsConfiguredWithCodeRule();
+@WithJenkinsConfiguredWithCode
+class GlobalLibrariesTest {
 
     @Issue("JENKINS-57557")
     @Test
     @ConfiguredWithCode("GlobalLibrariesGitHubTest.yml")
-    public void configure_global_library_using_github() {
+    void configure_global_library_using_github(JenkinsConfiguredWithCodeRule j) {
         assertEquals(1, GlobalLibraries.get().getLibraries().size());
-        final LibraryConfiguration library = GlobalLibraries.get().getLibraries().get(0);
+        final LibraryConfiguration library =
+                GlobalLibraries.get().getLibraries().get(0);
         assertEquals("jenkins-pipeline-lib", library.getName());
         final SCMSourceRetriever retriever = (SCMSourceRetriever) library.getRetriever();
         final GitHubSCMSource scm = (GitHubSCMSource) retriever.getScm();
@@ -40,11 +38,14 @@ public class GlobalLibrariesTest {
         assertEquals("jenkins-infra", scm.getRepoOwner());
         assertEquals("pipeline-library", scm.getRepository());
         assertEquals(3, scm.getTraits().size());
-        final BranchDiscoveryTrait branchDiscovery = (BranchDiscoveryTrait) scm.getTraits().get(0);
+        final BranchDiscoveryTrait branchDiscovery =
+                (BranchDiscoveryTrait) scm.getTraits().get(0);
         assertEquals(1, branchDiscovery.getStrategyId());
-        final OriginPullRequestDiscoveryTrait prDiscovery = (OriginPullRequestDiscoveryTrait) scm.getTraits().get(1);
+        final OriginPullRequestDiscoveryTrait prDiscovery =
+                (OriginPullRequestDiscoveryTrait) scm.getTraits().get(1);
         assertEquals(2, prDiscovery.getStrategyId());
-        final ForkPullRequestDiscoveryTrait forkDiscovery = (ForkPullRequestDiscoveryTrait) scm.getTraits().get(2);
+        final ForkPullRequestDiscoveryTrait forkDiscovery =
+                (ForkPullRequestDiscoveryTrait) scm.getTraits().get(2);
         assertEquals(3, forkDiscovery.getStrategyId());
         assertThat(forkDiscovery.getTrust(), instanceOf(TrustPermission.class));
     }

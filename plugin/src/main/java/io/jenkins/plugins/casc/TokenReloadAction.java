@@ -1,15 +1,22 @@
 package io.jenkins.plugins.casc;
 
+import static java.util.logging.Level.SEVERE;
+
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
 import hudson.model.UnprotectedRootAction;
 import hudson.security.ACL;
 import hudson.security.ACLContext;
+import hudson.util.HttpResponses;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.logging.Logger;
-import javax.servlet.http.HttpServletRequest;
-import org.kohsuke.stapler.StaplerRequest;
-import org.kohsuke.stapler.StaplerResponse;
+import org.kohsuke.stapler.StaplerRequest2;
+import org.kohsuke.stapler.StaplerResponse2;
 import org.kohsuke.stapler.interceptor.RequirePOST;
 
 @Extension
@@ -19,6 +26,7 @@ public class TokenReloadAction implements UnprotectedRootAction {
     public static final String URL_NAME = "reload-configuration-as-code";
     public static final String RELOAD_TOKEN_PROPERTY = "casc.reload.token";
     public static final String RELOAD_TOKEN_QUERY_PARAMETER = "casc-reload-token";
+    public static final String CASC_RELOAD_TOKEN_ENV = "CASC_RELOAD_TOKEN";
 
     @CheckForNull
     @Override
@@ -39,8 +47,8 @@ public class TokenReloadAction implements UnprotectedRootAction {
     }
 
     @RequirePOST
-    public void doIndex(StaplerRequest request, StaplerResponse response) throws IOException {
-        String token = getReloadTokenProperty();
+    public void doIndex(StaplerRequest2 request, StaplerResponse2 response) throws IOException, ServletException {
+        String token = getReloadToken();
 
         if (token == null || token.isEmpty()) {
             response.sendError(404);
@@ -48,11 +56,21 @@ public class TokenReloadAction implements UnprotectedRootAction {
         } else {
             String requestToken = getRequestToken(request);
 
-            if (token.equals(requestToken)) {
+            if (requestToken != null
+                    && MessageDigest.isEqual(
+                            token.getBytes(StandardCharsets.UTF_8), requestToken.getBytes(StandardCharsets.UTF_8))) {
                 LOGGER.info("Configuration reload triggered via token");
 
-                try (ACLContext ignored = ACL.as(ACL.SYSTEM)) {
+                try (ACLContext ignored = ACL.as2(ACL.SYSTEM2)) {
                     ConfigurationAsCode.get().configure();
+                } catch (ConfiguratorException e) {
+                    LOGGER.log(SEVERE, "Failed to reload Jenkins Configuration as Code via token", e);
+
+                    String message = e.getMessage() != null ? e.getMessage() : "Unknown configuration error";
+
+                    response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                    HttpResponses.errorJSON("Failed to reload configuration: " + message)
+                            .generateResponse(request, response, this);
                 }
             } else {
                 response.sendError(401);
@@ -65,12 +83,17 @@ public class TokenReloadAction implements UnprotectedRootAction {
         return request.getParameter(RELOAD_TOKEN_QUERY_PARAMETER);
     }
 
-    private static String getReloadTokenProperty() {
+    private static String getReloadToken() {
+        final String envToken = System.getenv(CASC_RELOAD_TOKEN_ENV);
+        if (envToken != null && !envToken.isEmpty()) {
+            return envToken;
+        }
+
         return System.getProperty(RELOAD_TOKEN_PROPERTY);
     }
 
     public static boolean tokenReloadEnabled() {
-        String token = getReloadTokenProperty();
+        String token = getReloadToken();
         return token != null && !token.isEmpty();
     }
 }
